@@ -244,7 +244,10 @@ def summarize(records: list[dict], k: int = 5) -> dict:
 
     delta = None
     if p1_base.value is not None and p1_sv.value is not None:
-        delta = 100 * (p1_sv.value - p1_base.value)
+        # Rounded at source: float noise of ~1e-15 sitting on a hypothesis
+        # threshold silently flips the verdict (9.999999999999998 < 10 is True
+        # while the true value, exactly 10, is not). See REVIEW.md R5.
+        delta = round(100 * (p1_sv.value - p1_base.value), 9)
 
     out = {
         "n_records": len(records),

@@ -5,6 +5,10 @@ Ground truth is the task's ASSERTS list and nothing else. No model is consulted.
 The candidate artifact is executed in a subprocess with a wall-clock timeout so
 that a hang, a crash, or a `sys.exit` cannot take the harness with it.
 
+The child's verdict is authenticated with a per-call nonce and delivered via a
+file rather than stdout, so a candidate cannot forge a passing grade by printing
+one and exiting early. See REVIEW.md R1.1.
+
 SECURITY: this executes model-generated code. The subprocess is isolated
 (`-I`) and time-bounded, but it is NOT a security sandbox — it has the same
 filesystem and network access as the parent. Run the live matrix only against
@@ -14,8 +18,10 @@ tasks you wrote, on a machine you are willing to run arbitrary Python on.
 from __future__ import annotations
 
 import json
+import secrets
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -66,31 +72,49 @@ def grade_completion(completion: str, task: dict, timeout_s: int = 10) -> Grade:
 
 def grade_artifact(code: str, task: dict, timeout_s: int = 10) -> Grade:
     """Grade an already-extracted artifact."""
+    nonce = secrets.token_hex(16)
     payload = {
         "kind": task["kind"],
         "code": code,
         "entrypoint": task.get("entrypoint"),
         "asserts": task["asserts"],
         "fixture": task.get("fixture", ""),
+        "nonce": nonce,
     }
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-I", str(CHILD)],
-            input=json.dumps(payload),
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-        )
-    except subprocess.TimeoutExpired:
-        return Grade(ERROR, f"timeout after {timeout_s}s", n_asserts=len(task["asserts"]))
+    n_asserts = len(task["asserts"])
 
-    try:
-        result = json.loads(proc.stdout.strip().splitlines()[-1])
-    except (ValueError, IndexError):
+    with tempfile.TemporaryDirectory(prefix="aelabs-grade-") as tmpdir:
+        verdict_path = Path(tmpdir) / "verdict.json"
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-I", str(CHILD), str(verdict_path)],
+                input=json.dumps(payload),
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return Grade(ERROR, f"timeout after {timeout_s}s", n_asserts=n_asserts)
+
+        # The verdict is read from the file, never from stdout: a candidate that
+        # prints a plausible verdict and exits produces no file at all.
+        try:
+            result = json.loads(verdict_path.read_text())
+        except (OSError, ValueError):
+            return Grade(
+                ERROR,
+                "grader child produced no verdict "
+                f"(rc={proc.returncode}): {(proc.stderr or proc.stdout)[-300:]}",
+                n_asserts=n_asserts,
+            )
+
+    # The nonce authenticates the verdict as the grader's, not the candidate's.
+    if result.get("nonce") != nonce:
         return Grade(
             ERROR,
-            f"grader child produced no verdict: {(proc.stderr or proc.stdout)[-300:]}",
-            n_asserts=len(task["asserts"]),
+            "verdict failed nonce authentication — the candidate artifact may have "
+            "written it",
+            n_asserts=n_asserts,
         )
     return Grade(
         outcome=result["outcome"],

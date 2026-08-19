@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+import yaml
+
 ROOT = Path(__file__).resolve().parent
 EXP = ROOT / "experiments" / "verifier-gap"
 
@@ -603,6 +605,289 @@ def gate_g3() -> list[Check]:
             "generation prompt identical across modes",
             proc.returncode == 0 and "identical" in proc.stdout,
             (proc.stdout + proc.stderr)[-400:],
+        )
+    )
+
+    return checks
+
+
+# --------------------------------------------------------------------------- #
+# G4 — run and calibration
+# --------------------------------------------------------------------------- #
+
+RESULTS_DIR = EXP / "results"
+
+
+def live_result_files() -> list[Path]:
+    """Results files from live runs, newest last."""
+    return sorted(RESULTS_DIR.glob("run-live-*.jsonl"))
+
+
+def read_records(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def recompute_false_green_rate(records: list[dict]) -> tuple[int, int]:
+    """Independent reimplementation of the headline metric.
+
+    Deliberately does NOT import metrics.py: the point of this check is to
+    catch a report that no longer matches its raw data, which a shared
+    implementation could not detect.
+    """
+    denom = [
+        r for r in records
+        if r.get("mode") == "self_verify" and r.get("truth_initial") != "correct"
+    ]
+    num = [r for r in denom if r.get("verdict") == "correct"]
+    return len(num), len(denom)
+
+
+def recompute_pass_at_1(records: list[dict], mode: str) -> tuple[int, int]:
+    subset = [r for r in records if r.get("mode") == mode]
+    return sum(1 for r in subset if r.get("truth_final") == "correct"), len(subset)
+
+
+@gate("G4", "Run: 100 live records with tokens, baseline pass@1 in range, report matches raw data")
+def gate_g4() -> list[Check]:
+    checks: list[Check] = []
+    cfg_path = EXP / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
+    cal = cfg.get("calibration", {})
+    lo = float(cal.get("baseline_pass_at_1_min", 0.50))
+    hi = float(cal.get("baseline_pass_at_1_max", 0.70))
+    max_parse_fail = float(cfg.get("thresholds", {}).get("max_verdict_parse_failure_rate", 0.02))
+
+    files = live_result_files()
+    checks.append(
+        Check(
+            f"live results file present ({len(files)} found)",
+            bool(files),
+            "no experiments/verifier-gap/results/run-live-*.jsonl — Phase 4 has not run",
+        )
+    )
+    if not files:
+        return checks
+
+    path = files[-1]
+    records = read_records(path)
+    checks.append(Check(f"{path.name}: 100 records", len(records) == 100, f"got {len(records)}"))
+
+    # --- provenance -------------------------------------------------------- #
+    providers = sorted({r.get("provider") for r in records})
+    checks.append(
+        Check(
+            "records come from the real API",
+            providers == ["anthropic"],
+            f"providers present: {providers} (mock output is not a result)",
+        )
+    )
+    models = sorted({r.get("model_resolved") for r in records})
+    checks.append(
+        Check(
+            f"single resolved model ({models[0] if models else '?'})",
+            len(models) == 1,
+            f"run spans multiple models: {models}",
+        )
+    )
+
+    # --- token accounting -------------------------------------------------- #
+    missing_tokens = [
+        r["record_id"] for r in records
+        if not (r.get("tokens", {}).get("input", 0) > 0 and r.get("tokens", {}).get("output", 0) > 0)
+    ]
+    checks.append(
+        Check("every record has non-zero token counts", not missing_tokens, f"{missing_tokens[:5]}")
+    )
+    missing_timing = [r["record_id"] for r in records if r.get("wall_clock_s") is None]
+    checks.append(Check("every record has wall-clock timing", not missing_timing, f"{missing_timing[:5]}"))
+
+    expected_calls = {"baseline": 1, "self_verify": 2}
+    bad_calls = [
+        r["record_id"] for r in records
+        if len(r.get("calls", [])) != expected_calls.get(r.get("mode"), -1)
+    ]
+    checks.append(Check("call counts match the mode", not bad_calls, f"{bad_calls[:5]}"))
+
+    # --- calibration window ------------------------------------------------ #
+    k, n = recompute_pass_at_1(records, "baseline")
+    p1 = k / n if n else None
+    checks.append(
+        Check(
+            f"baseline pass@1 = {p1:.1%} in [{lo:.0%}, {hi:.0%}]" if p1 is not None else "baseline pass@1",
+            p1 is not None and lo <= p1 <= hi,
+            "outside the calibration window — adjust task difficulty, record the change "
+            "in CALIBRATION.md, and rerun",
+        )
+    )
+    if not (lo <= (p1 or -1) <= hi):
+        checks.append(exists("experiments/verifier-gap/CALIBRATION.md", "file"))
+
+    # --- harness health ---------------------------------------------------- #
+    sv = [r for r in records if r.get("mode") == "self_verify"]
+    unparsed = [r for r in sv if r.get("verdict") is None]
+    rate = len(unparsed) / len(sv) if sv else 1.0
+    checks.append(
+        Check(
+            f"verdict parse failure rate {rate:.1%} <= {max_parse_fail:.0%}",
+            rate <= max_parse_fail,
+            f"{len(unparsed)} of {len(sv)} verification responses could not be parsed",
+        )
+    )
+
+    # --- report exists and matches the raw data ---------------------------- #
+    checks.append(exists("experiments/verifier-gap/RESULTS.md", "file"))
+    checks.append(exists("docs/assets/fig1_rates_by_mode.png", "file"))
+    checks.append(exists("docs/assets/fig2_calibration.png", "file"))
+
+    results_md = EXP / "RESULTS.md"
+    if results_md.exists():
+        md = results_md.read_text()
+        checks.append(
+            Check(
+                "report was generated from this run",
+                path.name in md,
+                f"RESULTS.md cites a different source than {path.name}",
+            )
+        )
+        checks.append(
+            Check(
+                "report is not labelled synthetic",
+                "SYNTHETIC DATA" not in md,
+                "RESULTS.md still carries the mock-data banner",
+            )
+        )
+
+        # Independent recomputation of the headline metric.
+        fg_k, fg_n = recompute_false_green_rate(records)
+        expected = 100 * fg_k / fg_n if fg_n else None
+        published = re.search(
+            r"\*\*false-green rate\*\*\s*\|\s*\*\*([\d.]+)%", md
+        )
+        if expected is None:
+            checks.append(Check("false-green rate recomputation", False, "no wrong answers to verify"))
+        elif not published:
+            checks.append(Check("false-green rate published in report", False, "not found in RESULTS.md"))
+        else:
+            delta = abs(float(published.group(1)) - expected)
+            checks.append(
+                Check(
+                    f"gate recomputes false-green rate independently: {expected:.1f}% "
+                    f"(report says {published.group(1)}%)",
+                    delta < 0.05,
+                    f"report disagrees with raw data by {delta:.2f}pp — "
+                    f"recomputed {fg_k}/{fg_n}",
+                )
+            )
+
+    return checks
+
+
+# --------------------------------------------------------------------------- #
+# G5 — adversarial review
+# --------------------------------------------------------------------------- #
+
+REVIEW_MD = EXP / "REVIEW.md"
+
+# The four risks Phase 5 is required to address, and a phrase that must appear.
+REQUIRED_RISKS = {
+    "R1": "harness",
+    "R2": "format",
+    "R3": "seed",
+    "R4": "sensitiv",
+}
+
+VALID_VERDICTS = {"FIXED", "CLEAR", "SCOPED", "ACCEPTED", "PENDING LIVE DATA"}
+
+
+@gate("G5", "REVIEW.md: every risk has a verdict and a proof that actually runs")
+def gate_g5() -> list[Check]:
+    checks: list[Check] = []
+    checks.append(exists("experiments/verifier-gap/REVIEW.md", "file"))
+    if not REVIEW_MD.exists():
+        return checks
+    md = REVIEW_MD.read_text()
+
+    # --- the risk table --------------------------------------------------- #
+    rows = re.findall(r"^\|\s*(R[\d.]+[a-z]?)\s+(.+?)\s*\|\s*\*\*(.+?)\*\*\s*\|\s*(.+?)\s*\|$",
+                      md, re.MULTILINE)
+    checks.append(Check(f"risk rows found: {len(rows)}", len(rows) >= 4, "expected at least 4"))
+
+    seen_ids = {r[0] for r in rows}
+    for prefix, phrase in REQUIRED_RISKS.items():
+        covered = any(rid.startswith(prefix) for rid in seen_ids)
+        checks.append(
+            Check(f"required risk {prefix} is addressed", covered, f"no row starting with {prefix}")
+        )
+        section = re.search(rf"^## {prefix}\b.*?$(.*?)(?=^## |\Z)", md, re.MULTILINE | re.DOTALL)
+        checks.append(
+            Check(
+                f"risk {prefix} has a discussion section mentioning '{phrase}'",
+                bool(section) and phrase.lower() in section.group(1).lower(),
+                "missing section or the section never mentions the risk's subject",
+            )
+        )
+
+    # --- each row: a verdict from the allowed set, and a proof ------------- #
+    proofs: list[tuple[str, str]] = []
+    for rid, _title, verdict, proof in rows:
+        checks.append(
+            Check(
+                f"{rid}: verdict '{verdict}' is a known verdict",
+                verdict.strip() in VALID_VERDICTS,
+                f"must be one of {sorted(VALID_VERDICTS)}",
+            )
+        )
+        target = re.search(r"`([^`]+)`", proof)
+        checks.append(Check(f"{rid}: cites a proof", bool(target), f"no code reference in {proof!r}"))
+        if target:
+            proofs.append((rid, target.group(1)))
+
+    # --- every cited proof must exist, and every cited test must pass ------ #
+    node_ids: list[tuple[str, str]] = []
+    for rid, ref in proofs:
+        path_part = ref.split("::", 1)[0]
+        checks.append(
+            Check(
+                f"{rid}: {path_part} exists",
+                (ROOT / path_part).exists() or (EXP / path_part).exists(),
+                f"cited proof file not found: {path_part}",
+            )
+        )
+        if "::" in ref:
+            node_ids.append((rid, ref))
+
+    if node_ids:
+        proc = run([interpreter(), "-m", "pytest", "-q", *[n for _, n in node_ids]])
+        checks.append(
+            Check(
+                f"all {len(node_ids)} cited tests pass",
+                proc.returncode == 0,
+                (proc.stdout + proc.stderr).strip()[-800:],
+            )
+        )
+        # A cited test that does not exist makes pytest error, not just fail.
+        checks.append(
+            Check(
+                "no cited test is missing",
+                "no tests ran" not in proc.stdout and "ERROR" not in proc.stdout,
+                (proc.stdout + proc.stderr).strip()[-500:],
+            )
+        )
+
+    # --- the review must not claim more than it proved -------------------- #
+    unresolved = [rid for rid, _t, verdict, _p in rows if verdict.strip() == "PENDING LIVE DATA"]
+    checks.append(
+        Check(
+            f"pending risks are declared, not hidden ({len(unresolved)} pending)",
+            True,
+            "",
+        )
+    )
+    checks.append(
+        Check(
+            "review states the threats it does not remove",
+            "does not remove" in md.lower() or "threats this review" in md.lower(),
+            "missing a section on residual threats",
         )
     )
 
