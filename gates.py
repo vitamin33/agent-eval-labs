@@ -143,6 +143,158 @@ def gate_g0() -> list[Check]:
 
 
 # --------------------------------------------------------------------------- #
+# G1 — RESEARCH.md is machine-checkable
+# --------------------------------------------------------------------------- #
+
+RESEARCH_MD = EXP / "RESEARCH.md"
+N_TASKS = 10
+
+
+def split_sections(md: str, level: int) -> dict[str, str]:
+    """Split markdown into {heading_text: body} for headings at `level`."""
+    pat = re.compile(rf"^{'#' * level} +(.+?)\s*$", re.MULTILINE)
+    out: dict[str, str] = {}
+    marks = list(pat.finditer(md))
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(md)
+        out[m.group(1).strip()] = md[m.end() : end]
+    return out
+
+
+def section_body(md: str, title_prefix: str, level: int = 2) -> str:
+    """Body of the level-N section whose title starts with `title_prefix`."""
+    for title, body in split_sections(md, level).items():
+        if title.lower().startswith(title_prefix.lower()):
+            return body
+    return ""
+
+
+@gate("G1", "RESEARCH.md: hypotheses have numbers, metrics have formulas, tasks have asserts")
+def gate_g1() -> list[Check]:
+    checks: list[Check] = []
+    checks.append(exists("experiments/verifier-gap/RESEARCH.md", "file"))
+    if not RESEARCH_MD.exists():
+        return checks
+    md = RESEARCH_MD.read_text()
+
+    # --- hypotheses ------------------------------------------------------- #
+    hyp_body = section_body(md, "Hypotheses")
+    hyps = {k: v for k, v in split_sections(hyp_body, 3).items() if re.match(r"^H\d+\b", k)}
+    checks.append(
+        Check(f"hypotheses found: {len(hyps)}", len(hyps) >= 3, "need at least 3 (H1, H2, H3)")
+    )
+    for name, body in sorted(hyps.items()):
+        hid = name.split()[0]
+        # a threshold line carrying at least one number
+        thr = re.search(r"^\s*-\s*\*\*Threshold:\*\*(.+)$", body, re.MULTILINE)
+        has_num = bool(thr and re.search(r"-?\d+(\.\d+)?", thr.group(1)))
+        checks.append(
+            Check(
+                f"{hid}: numeric threshold",
+                has_num,
+                "missing '- **Threshold:**' line with a number",
+            )
+        )
+        # an explicit falsification condition
+        fal = re.search(r"^\s*-\s*\*\*Falsified if:\*\*(.+)$", body, re.MULTILINE)
+        checks.append(
+            Check(f"{hid}: falsification condition", bool(fal), "missing '- **Falsified if:**'")
+        )
+        # names the metric that decides it
+        met = re.search(r"^\s*-\s*\*\*Metric:\*\*(.+)$", body, re.MULTILINE)
+        checks.append(Check(f"{hid}: names a metric", bool(met), "missing '- **Metric:**'"))
+
+    # --- metrics ---------------------------------------------------------- #
+    met_body = section_body(md, "Metric definitions")
+    metrics = split_sections(met_body, 3)
+    checks.append(
+        Check(f"metrics found: {len(metrics)}", len(metrics) >= 5, "need at least 5 metrics")
+    )
+    required = {
+        "pass_at_1",
+        "pass_hat_k",
+        "false_green_rate",
+        "cost_per_solved_task",
+        "ece",
+    }
+    missing = sorted(m for m in required if not any(m in k for k in metrics))
+    checks.append(
+        Check("required metrics defined", not missing, f"missing: {', '.join(missing)}")
+    )
+    for name, body in metrics.items():
+        has_formula = bool(re.search(r"\*\*Formula:\*\*", body))
+        checks.append(
+            Check(f"metric '{name}': has formula", has_formula, "missing '- **Formula:**' line")
+        )
+
+    # every hypothesis must reference a metric that is actually defined
+    metric_names = {re.sub(r"[^a-z0-9_]", "", k.lower()) for k in metrics}
+    for name, body in sorted(hyps.items()):
+        hid = name.split()[0]
+        met = re.search(r"^\s*-\s*\*\*Metric:\*\*(.+)$", body, re.MULTILINE)
+        referenced = re.findall(r"`([a-z0-9_]+)`", met.group(1)) if met else []
+        ok = bool(referenced) and all(
+            any(r in m or m in r for m in metric_names) for r in referenced
+        )
+        checks.append(
+            Check(
+                f"{hid}: metric is defined in Metric definitions",
+                ok,
+                f"referenced {referenced} but defined metrics are {sorted(metric_names)}",
+            )
+        )
+
+    # --- tasks ------------------------------------------------------------ #
+    task_body = section_body(md, "Task design")
+    tasks = {k: v for k, v in split_sections(task_body, 3).items() if re.match(r"^T\d{2}\b", k)}
+    ids = [k.split()[0] for k in tasks]
+    checks.append(Check(f"tasks found: {len(tasks)}", len(tasks) == N_TASKS, f"expected {N_TASKS}"))
+    checks.append(Check("task ids unique", len(set(ids)) == len(ids), f"ids: {ids}"))
+    checks.append(
+        Check(
+            "task ids are T01..T10",
+            sorted(ids) == [f"T{i:02d}" for i in range(1, N_TASKS + 1)],
+            f"got {sorted(ids)}",
+        )
+    )
+    for name, body in sorted(tasks.items()):
+        tid = name.split()[0]
+        checks.append(
+            Check(
+                f"{tid}: silent-failure mode",
+                bool(re.search(r"\*\*Silent-failure mode:\*\*", body)),
+                "missing '- **Silent-failure mode:**'",
+            )
+        )
+        spec = re.search(r"\*\*Assert spec:\*\*.*?```text\n(.*?)```", body, re.DOTALL)
+        n_asserts = (
+            len([ln for ln in spec.group(1).splitlines() if ln.strip()]) if spec else 0
+        )
+        checks.append(
+            Check(
+                f"{tid}: assert spec with >=3 cases (got {n_asserts})",
+                n_asserts >= 3,
+                "missing '- **Assert spec:**' followed by a ```text block",
+            )
+        )
+        checks.append(
+            Check(
+                f"{tid}: declares a task type",
+                bool(re.search(r"\*\*Type:\*\*", body)),
+                "missing '- **Type:**'",
+            )
+        )
+
+    # --- no LLM judges anywhere in the design ----------------------------- #
+    banned = re.findall(r"(?i)\bllm[- ]as[- ]a?[- ]?judge\b|\bmodel[- ]graded\b", md)
+    checks.append(
+        Check("no LLM-judge ground truth in design", not banned, f"found: {banned}")
+    )
+
+    return checks
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 

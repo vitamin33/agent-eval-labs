@@ -41,3 +41,14 @@ def test_unknown_gate_fails_closed():
 
 def test_list_gates_exits_zero():
     assert gates.main(["--list"]) == 0
+
+
+def test_research_md_parses_into_expected_shape():
+    """G1's parser must find the design's three machine-checked structures."""
+    md = (ROOT / "experiments/verifier-gap/RESEARCH.md").read_text()
+    hyps = gates.split_sections(gates.section_body(md, "Hypotheses"), 3)
+    metrics = gates.split_sections(gates.section_body(md, "Metric definitions"), 3)
+    tasks = gates.split_sections(gates.section_body(md, "Task design"), 3)
+    assert len(hyps) >= 3
+    assert len(metrics) >= 5
+    assert len([t for t in tasks if t.startswith("T")]) == gates.N_TASKS
