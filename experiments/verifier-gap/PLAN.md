@@ -98,7 +98,7 @@ Call budget: baseline is 1 API call per record (50 calls); self_verify is 2
   produces byte-identical records across two invocations.
 - **Verify:**
 ```bash
-.venv/bin/python experiments/verifier-gap/runner.py --dry-run --out /tmp/aelabs-dry.json
+.venv/bin/python experiments/verifier-gap/runner.py --dry-run --out /tmp/aelabs-dry.jsonl
 ```
 
 ### P3.7 — metrics with Wilson intervals
@@ -139,7 +139,8 @@ Call budget: baseline is 1 API call per record (50 calls); self_verify is 2
 
 ### P4.1 — full matrix run
 
-- **Deliverable:** `experiments/verifier-gap/results/run-<stamp>.json`
+- **Deliverable:** `experiments/verifier-gap/results/run-<stamp>.jsonl`
+  (JSON Lines: one record per line, appended and never rewritten)
 - **Acceptance:** 100 records, every one carrying non-zero input and output
   token counts and a single shared resolved model string.
 - **Verify:**

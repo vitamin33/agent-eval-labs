@@ -1,0 +1,49 @@
+# Every knob the experiment depends on. Nothing here is duplicated in code.
+
+# --- model ----------------------------------------------------------------- #
+# Anthropic model IDs are complete as written and are NOT date-suffixed.
+# Pinning is enforced at runtime instead: every record stores the resolved
+# `response.model`, and gate G4 fails if a run contains more than one.
+model: claude-haiku-4-5
+
+# The Claude 5 family and Opus 4.7/4.8 REJECT `temperature` with HTTP 400.
+# The loader refuses to start rather than discovering this mid-run.
+temperature_unsupported_models:
+  - claude-opus-5
+  - claude-sonnet-5
+  - claude-fable-5
+  - claude-mythos-5
+  - claude-opus-4-8
+  - claude-opus-4-7
+
+temperature: 0.0
+max_tokens: 2048
+
+# --- matrix ---------------------------------------------------------------- #
+runs_per_cell: 5          # k, for pass^k
+modes:
+  - baseline
+  - self_verify
+
+# The Messages API has no seed parameter. This seeds the harness only:
+# task ordering, run indexing, and dry-run mock responses. It does NOT make
+# live sampling reproducible. See RESEARCH.md.
+seed: 20260819
+
+# --- pricing (USD per 1M tokens, claude-haiku-4-5) ------------------------- #
+pricing:
+  input_per_mtok: 1.00
+  output_per_mtok: 5.00
+
+# --- grading --------------------------------------------------------------- #
+grading:
+  timeout_seconds: 10
+
+# --- calibration target (Phase 4) ------------------------------------------ #
+calibration:
+  baseline_pass_at_1_min: 0.50
+  baseline_pass_at_1_max: 0.70
+
+# --- harness health thresholds enforced by gate G4 ------------------------- #
+thresholds:
+  max_verdict_parse_failure_rate: 0.02

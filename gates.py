@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shlex
 import subprocess
@@ -436,6 +437,175 @@ def gate_g2() -> list[Check]:
             "",
         )
     )
+    return checks
+
+
+# --------------------------------------------------------------------------- #
+# G3 — implementation: tests green, dry run valid, false green caught,
+#      prompts differ only by the verification block
+# --------------------------------------------------------------------------- #
+
+REQUIRED_RECORD_KEYS = {
+    "schema_version", "record_id", "task_id", "mode", "run_index", "provider",
+    "model_requested", "model_resolved", "prompts", "completion_generation",
+    "grade_initial", "grade_final", "truth_initial", "truth_final", "verdict",
+    "confidence", "calls", "tokens", "cost_usd", "wall_clock_s", "timestamp",
+}
+
+
+def _exp_python() -> list[str]:
+    """Interpreter invocation with experiments/verifier-gap importable."""
+    return [interpreter()]
+
+
+def _run_py(code: str, timeout: int = 600) -> subprocess.CompletedProcess:
+    """Run a snippet with the experiment directory on sys.path."""
+    preamble = (
+        "import sys; sys.path.insert(0, r'%s'); sys.path.insert(0, r'%s')\n" % (str(EXP), str(ROOT))
+    )
+    return subprocess.run(
+        [interpreter(), "-c", preamble + code],
+        cwd=ROOT, capture_output=True, text=True, timeout=timeout,
+    )
+
+
+@gate("G3", "Implementation: pytest green, valid dry run, false green detected, prompt diff")
+def gate_g3() -> list[Check]:
+    checks: list[Check] = []
+
+    # --- deliverables ----------------------------------------------------- #
+    for rel in (
+        "experiments/verifier-gap/config.yaml",
+        "experiments/verifier-gap/config.py",
+        "experiments/verifier-gap/runner.py",
+        "experiments/verifier-gap/metrics.py",
+        "experiments/verifier-gap/report.py",
+        "experiments/verifier-gap/extract.py",
+        "experiments/verifier-gap/grade.py",
+        "experiments/verifier-gap/prompts.py",
+        "experiments/verifier-gap/verdict.py",
+        "experiments/verifier-gap/provider.py",
+        "tests/test_false_green.py",
+        "tests/test_prompt_diff.py",
+    ):
+        checks.append(exists(rel, "file"))
+
+    n_task_modules = len(list((EXP / "tasks").glob("t*.py")))
+    checks.append(
+        Check(f"task modules present: {n_task_modules}", n_task_modules == N_TASKS, f"expected {N_TASKS}")
+    )
+
+    # --- the whole suite must be green ------------------------------------ #
+    proc = run([interpreter(), "-m", "pytest", "-q"])
+    tail = (proc.stdout + proc.stderr).strip()
+    checks.append(Check("pytest suite green", proc.returncode == 0, tail[-800:]))
+
+    # --- the two critical tests, named explicitly ------------------------- #
+    for label, target in (
+        ("synthetic false green is counted", "tests/test_false_green.py"),
+        ("prompts differ only by verification block", "tests/test_prompt_diff.py"),
+    ):
+        proc = run([interpreter(), "-m", "pytest", target, "-q"])
+        checks.append(
+            Check(label, proc.returncode == 0, (proc.stdout + proc.stderr).strip()[-500:])
+        )
+
+    # --- no LLM anywhere in grading --------------------------------------- #
+    grading_sources = ["grade.py", "_grade_child.py", "metrics.py"] + [
+        f"tasks/{p.name}" for p in sorted((EXP / "tasks").glob("*.py"))
+    ]
+    leaks = []
+    for rel in grading_sources:
+        text = (EXP / rel).read_text()
+        if re.search(r"\banthropic\b|\bclient\.messages\b", text):
+            leaks.append(rel)
+    checks.append(
+        Check(
+            "ground truth never calls a model",
+            not leaks,
+            f"model access found in grading path: {leaks}",
+        )
+    )
+
+    # --- dry run produces schema-valid JSON with token counts ------------- #
+    tmp = ROOT / ".gate-dry.jsonl"
+    if tmp.exists():
+        tmp.unlink()
+    proc = run(
+        [interpreter(), str(EXP / "runner.py"), "--dry-run", "--out", str(tmp), "--quiet"],
+        timeout=900,
+    )
+    ok = proc.returncode == 0 and tmp.exists()
+    checks.append(Check("dry run completes", ok, (proc.stdout + proc.stderr)[-500:]))
+
+    if ok:
+        records = [json.loads(line) for line in tmp.read_text().splitlines() if line.strip()]
+        checks.append(Check(f"dry run wrote {len(records)} records", len(records) == 100, "expected 100"))
+        bad_schema = [r["record_id"] for r in records if not REQUIRED_RECORD_KEYS <= set(r)]
+        checks.append(Check("every record is schema-valid", not bad_schema, f"bad: {bad_schema[:5]}"))
+        no_tokens = [
+            r["record_id"]
+            for r in records
+            if not (r["tokens"]["input"] > 0 and r["tokens"]["output"] > 0)
+        ]
+        checks.append(Check("every record has token counts", not no_tokens, f"missing: {no_tokens[:5]}"))
+        no_timing = [r["record_id"] for r in records if "wall_clock_s" not in r]
+        checks.append(Check("every record has wall-clock timing", not no_timing, f"missing: {no_timing[:5]}"))
+        checks.append(
+            Check(
+                "dry-run records are labelled synthetic",
+                all(r["provider"] == "mock" for r in records),
+                "a mock record is not labelled provider=mock",
+            )
+        )
+        # metrics must consume the dry run without special-casing
+        proc = _run_py(
+            "import metrics, json;"
+            f"r=metrics.load_records(r'{tmp}');"
+            "s=metrics.summarize(r,k=5);"
+            "print(json.dumps({'n':s['n_records'],'fg':s['false_green_rate']['n']}))"
+        )
+        checks.append(
+            Check("metrics.summarize consumes the dry run", proc.returncode == 0, proc.stderr[-400:])
+        )
+        tmp.unlink()
+
+    # --- an injected false green is counted, checked here too ------------- #
+    proc = _run_py(
+        "import metrics;"
+        "rec={'mode':'self_verify','truth_initial':'wrong','verdict':'correct','confidence':99};"
+        "r=metrics.false_green_rate([rec]);"
+        "assert r.numerator==1 and r.value==1.0, r;"
+        "print('counted')"
+    )
+    checks.append(
+        Check(
+            "gate-level false-green injection is counted",
+            proc.returncode == 0 and "counted" in proc.stdout,
+            (proc.stdout + proc.stderr)[-400:],
+        )
+    )
+
+    # --- prompt diff, checked independently of the test suite ------------- #
+    proc = _run_py(
+        "import prompts;"
+        "from tasks import load_tasks;"
+        "t=load_tasks()[0];"
+        "base=prompts.generation_messages(t);"
+        "sv=prompts.verification_messages(t,'A');"
+        "assert sv[:len(base)]==base, 'generation turn differs';"
+        "assert sv[-1]['content']==prompts.VERIFICATION_BLOCK, 'unexpected trailing turn';"
+        "assert sv[:-2]==base, 'baseline not recoverable';"
+        "print('identical')"
+    )
+    checks.append(
+        Check(
+            "generation prompt identical across modes",
+            proc.returncode == 0 and "identical" in proc.stdout,
+            (proc.stdout + proc.stderr)[-400:],
+        )
+    )
+
     return checks
 
 
