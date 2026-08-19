@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-eval-labs"
+version = "0.1.0"
+description = "Public repository of agent reliability experiments. Experiment 1: the Verifier Gap."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "anthropic>=0.40",
+    "pyyaml>=6.0",
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+# The experiment lives at experiments/verifier-gap/ (hyphen => not an importable
+# package). Tests put that directory on sys.path via tests/conftest.py instead of
+# installing it. Only gates.py is exposed as a module.
+[tool.setuptools]
+py-modules = ["gates"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+pythonpath = ["."]
