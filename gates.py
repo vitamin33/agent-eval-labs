@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -26,6 +27,9 @@ from typing import Callable, Iterable
 import yaml
 
 ROOT = Path(__file__).resolve().parent
+# Set while a gate is executing, so a gate cannot be re-entered from inside the
+# pytest run it launched.
+GATE_ENV = "AELABS_IN_GATE"
 EXP = ROOT / "experiments" / "verifier-gap"
 
 # --------------------------------------------------------------------------- #
@@ -44,15 +48,20 @@ class Check:
 
 CheckFn = Callable[[], Iterable[Check]]
 REGISTRY: dict[str, tuple[str, CheckFn]] = {}
+# Gates that cannot pass without a real API run. They are never silently
+# skipped: --offline names them in its output and `--all` still runs them.
+REQUIRES_LIVE: set[str] = set()
 
 
-def gate(gate_id: str, title: str) -> Callable[[CheckFn], CheckFn]:
+def gate(gate_id: str, title: str, requires_live: bool = False) -> Callable[[CheckFn], CheckFn]:
     """Register a gate function under `gate_id`."""
 
     def decorate(fn: CheckFn) -> CheckFn:
         if gate_id in REGISTRY:
             raise RuntimeError(f"duplicate gate id: {gate_id}")
         REGISTRY[gate_id] = (title, fn)
+        if requires_live:
+            REQUIRES_LIVE.add(gate_id)
         return fn
 
     return decorate
@@ -660,7 +669,11 @@ def recompute_pass_at_1(records: list[dict], mode: str) -> tuple[int, int]:
     return sum(1 for r in subset if r.get("truth_final") == "correct"), len(subset)
 
 
-@gate("G4", "Run: 100 live records with tokens, baseline pass@1 in range, report matches raw data")
+@gate(
+    "G4",
+    "Run: 100 live records with tokens, baseline pass@1 in range, report matches raw data",
+    requires_live=True,
+)
 def gate_g4() -> list[Check]:
     checks: list[Check] = []
     cfg_path = EXP / "config.yaml"
@@ -1052,13 +1065,36 @@ def _color(s: str, c: str) -> str:
     return s if not sys.stdout.isatty() else f"{c}{s}{RESET}"
 
 
+def select_gates(offline: bool = False) -> tuple[list[str], list[str]]:
+    """(gates to run, gates skipped). Pure: runs nothing, so it is testable."""
+    every = sorted(REGISTRY)
+    if not offline:
+        return every, []
+    return (
+        [g for g in every if g not in REQUIRES_LIVE],
+        [g for g in every if g in REQUIRES_LIVE],
+    )
+
+
 def run_gate(gate_id: str) -> bool:
     if gate_id not in REGISTRY:
         print(f"unknown gate: {gate_id}. known: {', '.join(sorted(REGISTRY))}")
         return False
+    if os.environ.get(GATE_ENV):
+        # Gates shell out to pytest; a test that runs a gate would recurse until
+        # the timeout. Fail loudly instead of hanging.
+        print(
+            f"refusing to run {gate_id}: already inside a gate "
+            f"({GATE_ENV} is set). Tests must call select_gates(), not run_gate()."
+        )
+        return False
     title, fn = REGISTRY[gate_id]
     print(f"\n=== {gate_id}: {title} ===")
-    checks = list(fn())
+    os.environ[GATE_ENV] = gate_id
+    try:
+        checks = list(fn())
+    finally:
+        os.environ.pop(GATE_ENV, None)
     for c in checks:
         mark = _color("PASS", GREEN) if c.ok else _color("FAIL", RED)
         print(f"  [{mark}] {c.name}")
@@ -1076,19 +1112,29 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--gate", help="gate id to run, e.g. G0")
     ap.add_argument("--all", action="store_true", help="run every registered gate")
+    ap.add_argument(
+        "--offline",
+        action="store_true",
+        help="run every gate that does not require a live API run (CI default)",
+    )
     ap.add_argument("--list", action="store_true", help="list registered gates")
     args = ap.parse_args(argv)
 
     if args.list:
         for gid in sorted(REGISTRY):
-            print(f"{gid}\t{REGISTRY[gid][0]}")
+            tag = " [requires live run]" if gid in REQUIRES_LIVE else ""
+            print(f"{gid}\t{REGISTRY[gid][0]}{tag}")
         return 0
 
-    if args.all:
-        results = {gid: run_gate(gid) for gid in sorted(REGISTRY)}
+    if args.all or args.offline:
+        selected, skipped = select_gates(offline=args.offline)
+        results = {gid: run_gate(gid) for gid in selected}
         print("\n=== summary ===")
         for gid, ok in results.items():
             print(f"  {gid}: {'PASS' if ok else 'FAIL'}")
+        for gid in skipped:
+            # Named, not hidden: a skipped gate is an open phase, not a pass.
+            print(f"  {gid}: SKIPPED (requires a live API run) — {REGISTRY[gid][0]}")
         return 0 if all(results.values()) else 1
 
     if args.gate:

@@ -20,5 +20,6 @@ jobs:
           .venv/bin/python -m pip install -e ".[dev]"
       - name: Unit tests
         run: .venv/bin/python -m pytest
-      - name: Phase gates
-        run: .venv/bin/python gates.py --all
+      - name: Phase gates (offline)
+        # G4 needs a real API run and is reported as SKIPPED, never as a pass.
+        run: .venv/bin/python gates.py --offline

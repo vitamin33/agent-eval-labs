@@ -52,3 +52,26 @@ def test_research_md_parses_into_expected_shape():
     assert len(hyps) >= 3
     assert len(metrics) >= 5
     assert len([t for t in tasks if t.startswith("T")]) == gates.N_TASKS
+
+
+def test_offline_selection_excludes_only_the_live_gates():
+    """Pure selection — must not execute a gate, which would run pytest again."""
+    selected, skipped = gates.select_gates(offline=True)
+    assert set(skipped) == gates.REQUIRES_LIVE
+    assert set(selected) | set(skipped) == set(gates.REGISTRY)
+    assert not set(selected) & gates.REQUIRES_LIVE
+
+
+def test_all_selection_runs_every_gate_including_the_live_one():
+    """--offline is a CI convenience, not a way to make G4 disappear."""
+    selected, skipped = gates.select_gates(offline=False)
+    assert set(selected) == set(gates.REGISTRY)
+    assert skipped == []
+    assert gates.REQUIRES_LIVE, "at least one gate should require a live run"
+
+
+def test_a_gate_refuses_to_run_from_inside_another_gate(monkeypatch, capsys):
+    """Recursion guard: gates shell out to pytest, so a test must never run one."""
+    monkeypatch.setenv(gates.GATE_ENV, "G0")
+    assert gates.run_gate("G0") is False
+    assert "refusing to run G0" in capsys.readouterr().out
