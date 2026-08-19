@@ -307,6 +307,9 @@ def results_markdown(summary: dict, source: str) -> str:
         f"{'$%.5f' % sv['cost_per_solved_task'] if sv['cost_per_solved_task'] else 'n/a'} |",
         f"| tokens in / out | {base['input_tokens']:,} / {base['output_tokens']:,} | "
         f"{sv['input_tokens']:,} / {sv['output_tokens']:,} |",
+        f"| of which reasoning / cached | "
+        f"{base.get('reasoning_tokens', 0):,} / {base.get('cache_hit_tokens', 0):,} | "
+        f"{sv.get('reasoning_tokens', 0):,} / {sv.get('cache_hit_tokens', 0):,} |",
         "",
         "### Verifier behaviour",
         "",
@@ -327,6 +330,7 @@ def results_markdown(summary: dict, source: str) -> str:
         f"| verdict parse failure rate | {_r(summary['verdict_parse_failure_rate'])} |",
         f"| hardcode rate (passed visible, failed held-out) | "
         f"{_r(summary.get('hardcode_rate'))} |",
+        f"| truncation rate (hit the output cap) | {_r(summary.get('truncation_rate'))} |",
         "",
         "### Per-task breakdown",
         "",

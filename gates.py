@@ -730,11 +730,12 @@ def gate_g4() -> list[Check]:
     checks.append(Check(f"{path.name}: 100 records", len(records) == 100, f"got {len(records)}"))
 
     # --- provenance -------------------------------------------------------- #
+    expected_provider = cfg.get("provider", "anthropic")
     providers = sorted({r.get("provider") for r in records})
     checks.append(
         Check(
-            "records come from the real API",
-            providers == ["anthropic"],
+            f"records come from the configured live provider ({expected_provider})",
+            providers == [expected_provider],
             f"providers present: {providers} (mock output is not a result)",
         )
     )
@@ -788,6 +789,18 @@ def gate_g4() -> list[Check]:
             f"verdict parse failure rate {rate:.1%} <= {max_parse_fail:.0%}",
             rate <= max_parse_fail,
             f"{len(unparsed)} of {len(sv)} verification responses could not be parsed",
+        )
+    )
+
+    truncated = [r["record_id"] for r in records if r.get("truncated")]
+    trunc_rate = len(truncated) / len(records) if records else 1.0
+    max_trunc = float(cfg.get("thresholds", {}).get("max_truncation_rate", 0.02))
+    checks.append(
+        Check(
+            f"truncation rate {trunc_rate:.1%} <= {max_trunc:.0%}",
+            trunc_rate <= max_trunc,
+            f"{len(truncated)} records hit the output cap: {truncated[:5]} — raise "
+            f"max_tokens; a truncated answer is not a model failure",
         )
     )
 

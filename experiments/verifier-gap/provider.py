@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 import time
 from dataclasses import dataclass, field
@@ -38,6 +39,15 @@ class CallResult:
     stop_reason: str | None = None
     structured: bool = False
     error: str | None = None
+    # Part of input_tokens served from the provider's prompt cache, billed at a
+    # much lower rate. Self-verify resends the generation prompt verbatim, so
+    # this materially changes the H2 cost multiplier.
+    cache_hit_tokens: int = 0
+    # Reasoning tokens are billed as output but never appear in the text. On
+    # DeepSeek v4 they dominate; tracking them separately keeps "the model
+    # wrote nothing" distinguishable from "the model was cut off thinking".
+    reasoning_tokens: int = 0
+    truncated: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -99,6 +109,111 @@ class AnthropicProvider:
             latency_s=latency,
             stop_reason=response.stop_reason,
             structured=structured,
+        )
+
+
+class DeepSeekProvider:
+    """DeepSeek via its OpenAI-compatible endpoint.
+
+    Two behaviours of this API shape the harness:
+
+    1. **Reasoning tokens.** v4 models spend most of `max_tokens` on reasoning
+       that never appears in the response. A budget sized for the answer alone
+       returns an EMPTY completion with `finish_reason="length"` — measured at
+       2048 tokens on v4-pro. `truncated` is recorded so gate G4 can fail a run
+       where that contaminated the results instead of scoring it as refusals.
+    2. **No `json_schema`.** `response_format: {"type": "json_schema"}` returns
+       400 "This response_format type is unavailable now", so structured
+       verdicts fall back to `json_object` mode and then to plain text. Which
+       path was used is recorded per call; the tolerant parser in verdict.py
+       handles the rest, and `verdict_parse_failure_rate` measures the cost.
+    """
+
+    name = "deepseek"
+
+    def __init__(self, model, max_tokens, sampling, base_url, api_key):
+        from openai import OpenAI  # imported here so dry-run needs no package
+
+        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=300.0, max_retries=3)
+        self.model = model
+        self.max_tokens = max_tokens
+        self.sampling = sampling
+        # Negotiated once, then reused: no point re-discovering a 400 per call.
+        self._json_mode: str | None = None
+
+    def _request(self, messages, response_format):
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": self.max_tokens,
+            **self.sampling,
+        }
+        if response_format:
+            kwargs["response_format"] = response_format
+        return self.client.chat.completions.create(**kwargs)
+
+    def complete(
+        self,
+        system: str,
+        messages: list[dict],
+        *,
+        schema: dict | None = None,
+        trace: dict | None = None,
+    ) -> CallResult:
+        payload = [{"role": "system", "content": system}] + [
+            {"role": m["role"], "content": m["content"]} for m in messages
+        ]
+
+        attempts: list[tuple[str, dict | None]] = []
+        if schema is None:
+            attempts = [("none", None)]
+        elif self._json_mode == "json_object":
+            attempts = [("json_object", {"type": "json_object"}), ("none", None)]
+        elif self._json_mode == "none":
+            attempts = [("none", None)]
+        else:
+            attempts = [
+                ("json_schema", {"type": "json_schema", "json_schema": {
+                    "name": "verdict", "strict": True, "schema": schema}}),
+                ("json_object", {"type": "json_object"}),
+                ("none", None),
+            ]
+
+        last_exc = None
+        for mode, response_format in attempts:
+            t0 = time.perf_counter()
+            try:
+                response = self._request(payload, response_format)
+            except Exception as exc:  # noqa: BLE001 - provider-specific error types
+                if "response_format" not in str(exc) and "invalid_request" not in str(exc):
+                    raise
+                last_exc = exc
+                continue
+            latency = time.perf_counter() - t0
+            if schema is not None:
+                self._json_mode = mode
+            return self._to_result(response, latency, structured=mode != "none")
+
+        raise RuntimeError(f"every response_format attempt failed: {last_exc}")
+
+    @staticmethod
+    def _to_result(response, latency: float, structured: bool) -> CallResult:
+        choice = response.choices[0]
+        usage = response.usage
+        details = getattr(usage, "completion_tokens_details", None)
+        reasoning = getattr(details, "reasoning_tokens", 0) or 0
+        cache_hit = getattr(usage, "prompt_cache_hit_tokens", 0) or 0
+        return CallResult(
+            text=choice.message.content or "",
+            input_tokens=usage.prompt_tokens,
+            output_tokens=usage.completion_tokens,
+            model=response.model,
+            latency_s=latency,
+            stop_reason=choice.finish_reason,
+            structured=structured,
+            cache_hit_tokens=cache_hit,
+            reasoning_tokens=reasoning,
+            truncated=choice.finish_reason == "length",
         )
 
 
@@ -176,14 +291,19 @@ class MockProvider:
             text = self._generation(rng, task)
 
         prompt_chars = len(system) + sum(len(str(m["content"])) for m in messages)
+        out_tokens = self._tokens(text)
         return CallResult(
             text=text,
             input_tokens=self._tokens("x" * prompt_chars),
-            output_tokens=self._tokens(text),
+            output_tokens=out_tokens,
             model=f"{self.model}-mock",
             latency_s=0.0,
-            stop_reason="end_turn",
+            stop_reason="stop",
             structured=schema is not None,
+            # Deterministic stand-ins so downstream code exercises these paths.
+            cache_hit_tokens=0,
+            reasoning_tokens=out_tokens // 2,
+            truncated=False,
         )
 
     def _generation(self, rng: random.Random, task: dict) -> str:
@@ -220,5 +340,14 @@ def build_provider(cfg, *, dry_run: bool, tasks: dict):
     if dry_run:
         return MockProvider(
             cfg.model, cfg.max_tokens, cfg.sampling_params(), cfg.seed, tasks
+        )
+    if cfg.provider == "deepseek":
+        key = os.environ.get(cfg.api_key_env or "DEEPSEEK_API_KEY")
+        if not key:
+            raise RuntimeError(
+                f"{cfg.api_key_env} is not set. Put it in .env (chmod 600) or export it."
+            )
+        return DeepSeekProvider(
+            cfg.model, cfg.max_tokens, cfg.sampling_params(), cfg.base_url, key
         )
     return AnthropicProvider(cfg.model, cfg.max_tokens, cfg.sampling_params())

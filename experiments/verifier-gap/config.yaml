@@ -1,13 +1,20 @@
 # Every knob the experiment depends on. Nothing here is duplicated in code.
 
-# --- model ----------------------------------------------------------------- #
-# Anthropic model IDs are complete as written and are NOT date-suffixed.
-# Pinning is enforced at runtime instead: every record stores the resolved
-# `response.model`, and gate G4 fails if a run contains more than one.
-model: claude-haiku-4-5
+# --- provider -------------------------------------------------------------- #
+# `deepseek` (OpenAI-compatible API) or `anthropic`. See RESEARCH.md Amendment
+# A3 for why experiment 1 runs on DeepSeek.
+provider: deepseek
+base_url: https://api.deepseek.com
+api_key_env: DEEPSEEK_API_KEY
 
-# The Claude 5 family and Opus 4.7/4.8 REJECT `temperature` with HTTP 400.
-# The loader refuses to start rather than discovering this mid-run.
+# The exact model id, not the `deepseek-chat` alias — that alias resolves to
+# deepseek-v4-flash server-side, and pinning the alias would hide a silent
+# change of model. Every record stores the resolved id and gate G4 fails if a
+# run spans more than one.
+model: deepseek-v4-flash
+
+# Models known to REJECT the `temperature` parameter with HTTP 400. The loader
+# refuses to start rather than discovering this mid-run.
 temperature_unsupported_models:
   - claude-opus-5
   - claude-sonnet-5
@@ -17,7 +24,14 @@ temperature_unsupported_models:
   - claude-opus-4-7
 
 temperature: 0.0
-max_tokens: 2048
+
+# DeepSeek v4 models are reasoning models: most completion tokens are reasoning
+# tokens that never appear in the response. Measured on this task set,
+# v4-flash spends ~270-350 reasoning tokens before writing ~300 characters of
+# answer, and v4-pro exceeds 2048 reasoning tokens and returns an EMPTY
+# response. 4096 leaves headroom so a truncated answer is not silently graded
+# as a refusal. See `truncation_rate`, which gate G4 enforces.
+max_tokens: 4096
 
 # --- matrix ---------------------------------------------------------------- #
 runs_per_cell: 5          # k, for pass^k
@@ -25,15 +39,28 @@ modes:
   - baseline
   - self_verify
 
-# The Messages API has no seed parameter. This seeds the harness only:
-# task ordering, run indexing, and dry-run mock responses. It does NOT make
-# live sampling reproducible. See RESEARCH.md.
+# The API has no seed parameter. This seeds the harness only: task ordering,
+# run indexing, and dry-run mock responses. It does NOT make live sampling
+# reproducible. See RESEARCH.md.
 seed: 20260819
 
-# --- pricing (USD per 1M tokens, claude-haiku-4-5) ------------------------- #
+# --- pricing (USD per 1M tokens, deepseek-v4-flash) ------------------------ #
+# Cache hits cost ~31x less than misses, and self-verify's second call resends
+# the generation prompt verbatim — so hit/miss must be priced separately or the
+# cost_multiplier in H2 is wrong. DeepSeek also charges double during peak
+# hours (01:00-04:00 and 06:00-10:00 UTC). Costs are computed at the declared
+# tier so the metric is reproducible from raw token counts, rather than
+# depending on when the run happened to execute.
 pricing:
-  input_per_mtok: 1.00
-  output_per_mtok: 5.00
+  tier: peak            # peak | off_peak — peak is the conservative choice
+  peak:
+    input_cache_miss_per_mtok: 0.44
+    input_cache_hit_per_mtok: 0.014
+    output_per_mtok: 1.32
+  off_peak:
+    input_cache_miss_per_mtok: 0.22
+    input_cache_hit_per_mtok: 0.007
+    output_per_mtok: 0.66
 
 # --- grading --------------------------------------------------------------- #
 grading:
@@ -47,3 +74,6 @@ calibration:
 # --- harness health thresholds enforced by gate G4 ------------------------- #
 thresholds:
   max_verdict_parse_failure_rate: 0.02
+  # A truncated completion is graded as a non-answer, so truncation caused by a
+  # low max_tokens would be mismeasured as model failure.
+  max_truncation_rate: 0.02

@@ -41,6 +41,23 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _call_record(stage: str, result) -> dict:
+    """One API call's accounting. Cache and reasoning tokens are recorded
+    separately because both change what a token costs and what it bought."""
+    return {
+        "stage": stage,
+        "input_tokens": result.input_tokens,
+        "output_tokens": result.output_tokens,
+        "cache_hit_tokens": getattr(result, "cache_hit_tokens", 0),
+        "reasoning_tokens": getattr(result, "reasoning_tokens", 0),
+        "latency_s": round(result.latency_s, 4),
+        "stop_reason": result.stop_reason,
+        "truncated": bool(getattr(result, "truncated", False)),
+        "structured": bool(getattr(result, "structured", False)),
+        "model": result.model,
+    }
+
+
 def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
     """Execute one (task, mode, run_index) cell and return its record."""
     t_start = time.perf_counter()
@@ -52,16 +69,7 @@ def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
     gen = provider.complete(
         prompts.SYSTEM, gen_messages, trace={**trace, "stage": "generation"}
     )
-    calls.append(
-        {
-            "stage": "generation",
-            "input_tokens": gen.input_tokens,
-            "output_tokens": gen.output_tokens,
-            "latency_s": round(gen.latency_s, 4),
-            "stop_reason": gen.stop_reason,
-            "model": gen.model,
-        }
-    )
+    calls.append(_call_record("generation", gen))
 
     grade_initial: Grade = grade_completion(gen.text, task, timeout_s=cfg.grading_timeout_s)
     grade_final = grade_initial
@@ -86,16 +94,7 @@ def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
             },
         )
         verification_text = ver.text
-        calls.append(
-            {
-                "stage": "verification",
-                "input_tokens": ver.input_tokens,
-                "output_tokens": ver.output_tokens,
-                "latency_s": round(ver.latency_s, 4),
-                "stop_reason": ver.stop_reason,
-                "model": ver.model,
-            }
-        )
+        calls.append(_call_record("verification", ver))
         v = parse_verdict(ver.text, structured=ver.structured)
         if v.verdict == "wrong" and v.revised:
             grade_final = grade_completion(v.revised, task, timeout_s=cfg.grading_timeout_s)
@@ -103,6 +102,8 @@ def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
 
     in_tok = sum(c["input_tokens"] for c in calls)
     out_tok = sum(c["output_tokens"] for c in calls)
+    hit_tok = sum(c.get("cache_hit_tokens", 0) for c in calls)
+    reason_tok = sum(c.get("reasoning_tokens", 0) for c in calls)
     models = {c["model"] for c in calls}
 
     return {
@@ -115,6 +116,7 @@ def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
         "mode": mode,
         "run_index": run_index,
         "provider": provider.name,
+        "pricing_tier": cfg.pricing_tier,
         "model_requested": cfg.model,
         "model_resolved": sorted(models)[0] if len(models) == 1 else "|".join(sorted(models)),
         "temperature": cfg.temperature,
@@ -135,8 +137,14 @@ def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
         "verdict_source": v.source if v else None,
         "revised_applied": revised_applied,
         "calls": calls,
-        "tokens": {"input": in_tok, "output": out_tok},
-        "cost_usd": round(cfg.cost_usd(in_tok, out_tok), 8),
+        "tokens": {
+            "input": in_tok,
+            "output": out_tok,
+            "cache_hit": hit_tok,
+            "reasoning": reason_tok,
+        },
+        "truncated": any(c.get("truncated") for c in calls),
+        "cost_usd": round(cfg.cost_usd(in_tok, out_tok, hit_tok), 8),
         "wall_clock_s": round(time.perf_counter() - t_start, 4),
         "timestamp": _now(),
     }
@@ -161,10 +169,12 @@ def run_matrix(cfg, *, dry_run: bool, out_path: Path, progress=True) -> list[dic
                     records.append(rec)
                     n += 1
                     if progress:
+                        trunc = " TRUNCATED" if rec.get("truncated") else ""
                         print(
                             f"  [{n:3d}/{total}] {rec['record_id']:22s} "
-                            f"truth={rec['truth_final']:8s} verdict={str(rec['verdict']):8s} "
-                            f"tok={rec['tokens']['input']}/{rec['tokens']['output']}",
+                            f"truth={rec['truth_final']:9s} verdict={str(rec['verdict']):8s} "
+                            f"tok={rec['tokens']['input']}/{rec['tokens']['output']}"
+                            f"(r{rec['tokens']['reasoning']}) {rec['wall_clock_s']:.1f}s{trunc}",
                             flush=True,
                         )
     return records
@@ -180,6 +190,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
 
+    # Credentials come from .env (chmod 600), never from a committed file.
+    config_mod.load_dotenv()
     cfg = config_mod.load(args.config)
 
     if args.out:
@@ -195,8 +207,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"model={cfg.model} temperature={cfg.temperature} k={cfg.runs_per_cell} "
-          f"provider={'mock' if args.dry_run else 'anthropic'}")
+    print(f"provider={'mock' if args.dry_run else cfg.provider} model={cfg.model} "
+          f"temperature={cfg.temperature} max_tokens={cfg.max_tokens} "
+          f"k={cfg.runs_per_cell} pricing_tier={cfg.pricing_tier}")
     print(f"writing {out_path}")
     records = run_matrix(cfg, dry_run=args.dry_run, out_path=out_path, progress=not args.quiet)
 

@@ -43,14 +43,16 @@ agents into production.
 | 1 RESEARCH.md | G1 | passing |
 | 2 PLAN.md | G2 | passing |
 | 3 Implementation | G3 | passing |
-| 4 Run & calibrate | G4 | **blocked — needs `ANTHROPIC_API_KEY`** |
+| 4 Run & calibrate | G4 | see Status |
 | 5 Adversarial review | G5 | passing |
 | 6 Ship | G6 | passing |
 
 ## Method
 
-- **Model** `claude-haiku-4-5`, temperature 0.0, pinned by asserting a single
-  resolved model string across every record.
+- **Model** `deepseek-v4-flash` at temperature 0.0, reached through DeepSeek's
+  OpenAI-compatible endpoint. Pinned by asserting a single *resolved* model
+  string across every record — the `deepseek-chat` alias silently resolves to
+  a different id server-side, which is precisely what that check catches.
 - **Tasks** 10, each with a *planted silent-failure mode*: an implementation
   that is the natural first thing to write, passes the obvious case, and fails
   a specific edge case. Three data-parsing, two SQL, two bug fixes, three
@@ -65,6 +67,10 @@ agents into production.
   grading path to keep it that way.
 - **Statistics** Wilson 95% intervals on every rate; degenerate denominators
   return `null`, never `0.0`.
+- **Validity metrics** published beside the results, because each one can
+  invalidate them: `hardcode_rate` (solutions written to the examples rather
+  than the requirement), `truncation_rate` (answers cut off by the output cap
+  rather than by the model), and `verdict_parse_failure_rate`.
 
 Full design and metric formulas: [`RESEARCH.md`](experiments/verifier-gap/RESEARCH.md).
 Adversarial review: [`REVIEW.md`](experiments/verifier-gap/REVIEW.md).
@@ -142,14 +148,18 @@ That runs the full 100-record matrix against seeded mock responses, regenerates
 the table, both charts and the sensitivity analysis into `build/reproduce-dry/`,
 and is byte-identical on every invocation.
 
-The real experiment:
+The real experiment (~150 calls, well under $1 at current DeepSeek prices):
 
 ```bash
-export ANTHROPIC_API_KEY=...
+echo 'DEEPSEEK_API_KEY=sk-...' > .env && chmod 600 .env
 make run-live      # ~150 calls
 make report        # regenerates the table and charts from the newest run
 python gates.py --gate G4
 ```
+
+`.env` is gitignored; nothing reads a credential from a committed file. Swap
+`provider:` in `experiments/verifier-gap/config.yaml` to run the same matrix
+against Anthropic instead.
 
 Everything else:
 
@@ -164,12 +174,19 @@ make gates         # every phase gate
   per-task breakdown is published beside every aggregate precisely because the
   aggregate hides variance at this n; do not read a point estimate without its
   interval.
-- **Single capability tier.** Results are about `claude-haiku-4-5`. It was
-  chosen because the design needs baseline pass@1 in the 50–70% window — a
-  frontier model would ace these tasks and leave no wrong answers to verify —
-  and because the Claude 5 family **rejects the `temperature` parameter with
-  HTTP 400**, so a temperature-controlled experiment cannot use it. Whether the
-  generate-verify gap narrows with capability is experiment 2, not this one.
+- **Single capability tier.** Results are about `deepseek-v4-flash`. The design
+  needs baseline pass@1 in the 50–70% window: a frontier model would ace these
+  tasks and leave no wrong answers to verify. Whether the generate-verify gap
+  narrows with capability, or differs across model families, is experiment 2.
+- **It is a reasoning model, and that matters here.** Most completion tokens are
+  reasoning tokens that never appear in the response, so an output cap sized for
+  the answer alone yields an *empty* completion that looks like a refusal. This
+  bit during Phase 4 and is why `truncation_rate` is gated at 2%. Costs include
+  reasoning tokens, which is why self-verify is expensive.
+- **One provider deviation, recorded not hidden.** The repository's stated
+  constraint was the direct Anthropic SDK. Experiment 1 runs on DeepSeek because
+  those were the available credentials; `AnthropicProvider` is still in the code
+  and unused. See RESEARCH.md Amendment A3.
 - **Adversarial task distribution.** Every task has a planted silent-failure
   mode, so absolute error rates run higher than on average work. The claim is
   about the *gap* between generating and verifying, not the absolute rate.

@@ -4,6 +4,11 @@
 before any data was collected. Results live in `../../README.md` and
 `results/`; this file is never edited to match them.
 
+> **Superseded in part by [Amendment A3](#a3--provider-and-model-phase-4).** The
+> experiment runs on **`deepseek-v4-flash`**, not `claude-haiku-4-5`. The
+> Setup table and Model-choice section below record the design as frozen; A3
+> records what changed, why, and what it cost. Nothing else in the design moved.
+
 ## Thesis
 
 LLM agents are systematically better at *generating* answers than at
@@ -487,3 +492,50 @@ the boundary are flagged as such in the output.
 
 **Effect on results.** No threshold moved. A verdict can no longer be produced
 by rounding error, and a knife-edge verdict is now visibly a knife-edge verdict.
+
+### A3 — provider and model (Phase 4)
+
+**Reason.** No Anthropic credentials were available, and a DeepSeek key was.
+Phase 4 was otherwise blocked indefinitely, and an experiment that never runs
+measures nothing. The provider is now config-selected; `AnthropicProvider`
+remains in the code and is the intended path for experiment 2's cross-provider
+comparison.
+
+**Change.** `provider: deepseek`, `model: deepseek-v4-flash`, reached through
+the OpenAI-compatible endpoint with the `openai` SDK. This is a deliberate
+deviation from the original "direct Anthropic SDK" constraint, made at the
+maintainer's direction and recorded here rather than absorbed silently.
+
+**What the switch forced, all discovered by probing the API rather than by
+assumption:**
+
+1. **`deepseek-v4-flash` is a reasoning model.** Most completion tokens are
+   reasoning tokens that never appear in the response. At `max_tokens: 2048`,
+   `deepseek-v4-pro` returned `finish_reason="length"` with 2047 reasoning
+   tokens and an **empty** response — which this harness would have graded as a
+   refusal and scored as a model failure. `max_tokens` is now 4096, `v4-flash`
+   is pinned rather than `v4-pro`, and a new `truncation_rate` metric is gated
+   by G4 at 2% so this failure mode cannot contaminate a run unnoticed.
+2. **`response_format: {"type": "json_schema"}` returns HTTP 400**
+   ("This response_format type is unavailable now"). Structured verdicts fall
+   back to `json_object` mode, negotiated once per run. The tolerant parser in
+   `verdict.py` absorbs the difference and `verdict_parse_failure_rate`
+   measures what it cost.
+3. **Cache hits are billed ~31x cheaper than misses.** Self-verify's second
+   call resends the generation prompt verbatim, so it earns cache hits that
+   baseline cannot. Pricing input as a single rate would have overstated
+   self-verify's cost and inflated the H2 cost multiplier — the metric H2 turns
+   on. Hit and miss tokens are now recorded and priced separately.
+4. **Prices double during peak hours** (01:00-04:00 and 06:00-10:00 UTC). Costs
+   are computed at a declared tier (`peak`, the conservative choice) so the
+   metric is reproducible from raw token counts instead of depending on when
+   the run happened to execute.
+
+**Effect on the hypotheses.** None were changed. H2's thresholds are stated in
+multiples and percentage points, not dollars, so they transfer unchanged. The
+calibration window (baseline pass@1 in 50-70%) is model-dependent by
+construction and is what Phase 4 calibrates against.
+
+**Effect on external validity.** The conclusions are now about
+`deepseek-v4-flash`. The limitation was always "single model, single tier"; only
+the model's identity changed.

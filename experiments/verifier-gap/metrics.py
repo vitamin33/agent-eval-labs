@@ -170,6 +170,17 @@ def hardcode_rate(records: list[dict]) -> Rate:
     return Rate(len(hardcoded), len(graded))
 
 
+def truncation_rate(records: list[dict]) -> Rate:
+    """Fraction of records where a call hit the output cap.
+
+    A truncated completion has no usable answer and grades as a non-answer, so
+    truncation caused by a low `max_tokens` would be mismeasured as model
+    failure. On reasoning models this is a live risk: most of the budget is
+    spent on reasoning tokens that never reach the response.
+    """
+    return Rate(sum(1 for r in records if r.get("truncated")), len(records))
+
+
 def verdict_parse_failure_rate(records: list[dict]) -> Rate:
     sv = _mode(records, "self_verify")
     return Rate(sum(1 for r in sv if r["verdict"] is None), len(sv))
@@ -276,6 +287,7 @@ def summarize(records: list[dict], k: int = 5) -> dict:
         "verifier_accuracy": verifier_accuracy(records).to_dict(),
         "verdict_parse_failure_rate": verdict_parse_failure_rate(records).to_dict(),
         "hardcode_rate": hardcode_rate(records).to_dict(),
+        "truncation_rate": truncation_rate(records).to_dict(),
         "delta_pass_at_1_pp": delta,
         "cost_multiplier": (cost_sv / cost_base) if cost_base else None,
         "ece": ece,
@@ -295,6 +307,8 @@ def summarize(records: list[dict], k: int = 5) -> dict:
             "cost_per_solved_task": cost_per_solved_task(subset),
             "input_tokens": in_tok,
             "output_tokens": out_tok,
+            "cache_hit_tokens": sum(r["tokens"].get("cache_hit", 0) for r in subset),
+            "reasoning_tokens": sum(r["tokens"].get("reasoning", 0) for r in subset),
             "mean_wall_clock_s": (
                 sum(r["wall_clock_s"] for r in subset) / len(subset) if subset else None
             ),
