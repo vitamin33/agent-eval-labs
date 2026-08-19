@@ -27,6 +27,12 @@ TASK = {
         "json_get({'a': {'b': False}}, 'a.b', 'D') is False",
         "json_get({}, 'a', 'D') == 'D'",
     ],
+    "hidden_asserts": [
+        "json_get({'x': {'y': []}}, 'x.y', 'D') == []",
+        "json_get({'x': [{'y': 5}]}, 'x.0.y') == 5",
+        "json_get({'x': ''}, 'x', 'D') == ''",
+        "json_get({'x': 1}, 'x.y.z', 'D') == 'D'",
+    ],
     "reference": '''
 _MISSING = object()
 

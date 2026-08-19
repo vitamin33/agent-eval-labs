@@ -9,16 +9,67 @@ verdict and a link to the test or code that settles it.
 
 | Risk | Verdict | Proof |
 |---|---|---|
-| R1.1a Candidate forges a passing verdict via `sys.exit` | **FIXED** | `tests/test_adversarial.py::test_candidate_cannot_forge_a_verdict_via_sys_exit` |
-| R1.1b Candidate forges a passing verdict via `os._exit` | **FIXED** | `tests/test_adversarial.py::test_candidate_cannot_forge_a_verdict_via_os_exit` |
+| R1.1a Forged verdict via `sys.exit` | **FIXED** | `tests/test_adversarial.py::test_candidate_cannot_forge_a_verdict_via_sys_exit` |
+| R1.1b Forged verdict via `os._exit` | **FIXED** | `tests/test_adversarial.py::test_candidate_cannot_forge_a_verdict_via_os_exit` |
 | R1.2 Candidate rigs `__eq__` so every assert passes | **FIXED** | `tests/test_adversarial.py::test_rigged_equality_is_caught_on_every_python_task` |
 | R1.3 Refusal or empty answer graded as a pass | **CLEAR** | `tests/test_extract.py::test_refusal_returns_none_not_empty_string` |
 | R1.4 Unparseable verdict silently counted | **CLEAR** | `tests/test_false_green.py::test_unparsed_verdict_counts_as_neither_green_nor_red` |
+| R1.5a Candidate reads the nonce from `__main__` | **FIXED** | `tests/test_adversarial.py::test_candidate_cannot_read_the_nonce_from_main` |
+| R1.5b Candidate replaces `emit` | **FIXED** | `tests/test_adversarial.py::test_candidate_cannot_replace_the_emit_function` |
+| R1.5c `atexit` hook forges a verdict after grading | **FIXED** | `tests/test_adversarial.py::test_atexit_cannot_forge_a_verdict_after_grading` |
+| R1.6 Candidate rebinds builtins the grader uses | **FIXED** | `tests/test_adversarial.py::test_rebinding_a_builtin_is_detected` |
+| R1.7 Targeted `__eq__` rigging that evades the canary | **FIXED** | `tests/test_adversarial.py::test_targeted_equality_rigging_is_caught` |
+| R1.8 Solution hardcoded to the assert inputs | **FIXED** | `tests/test_adversarial.py::test_lookup_table_keyed_on_the_visible_cases_is_caught` |
 | R2 Ground truth depends on output format | **CLEAR** | `tests/test_adversarial.py::test_grade_is_invariant_to_response_formatting` |
 | R3 Seeds claimed to reproduce live runs | **SCOPED** | `tests/test_reproducibility.py::test_the_api_is_never_sent_a_seed_parameter` |
 | R4 Conclusions rest on the two hardest tasks | **PENDING LIVE DATA** | `experiments/verifier-gap/sensitivity.py` |
-| R5 Float noise flips a hypothesis verdict | **FIXED** | `tests/test_hypotheses.py::test_h2_boundary_is_strict_not_float_noisy` |
+| R5 Float noise flips a hypothesis verdict | **FIXED** | `tests/test_hypotheses.py::test_ece_noise_cannot_support_h3` |
 | R6 Executing model-generated code | **ACCEPTED** | `grade.py` module docstring |
+
+## Threat model
+
+The harness defends against **reward-hacking-shaped failures**: a model that
+takes a shortcut which happens to satisfy the oracle, without intending to
+attack anything. Hardcoding to the examples (R1.8) is the realistic member of
+this family; returning an object that compares equal to everything (R1.2) is the
+exotic one. Both are now caught.
+
+It does **not** defend against a hostile artifact. The candidate executes in the
+grader child's interpreter, so a sufficiently determined artifact can walk the
+GC or the frame stack to reach the verdict channel that R1.5 removed from
+ordinary reach. The defences below raise the cost of an accidental pass from
+"trivial" to "requires deliberate introspection of the harness"; they are not a
+security boundary. **The only real boundary is OS-level isolation** — a separate
+uid, a container, seccomp — which experiment 1 does not attempt and does not
+claim.
+
+Stating this precisely matters more than the defences themselves. The first
+version of this document claimed a nonce made verdicts unforgeable. The nonce
+was stored in the child's `__main__`, where any candidate could read it, so the
+claim was false while sounding rigorous — the same failure mode the experiment
+is about.
+
+### The attack probe
+
+Twelve vectors, run against the grader on every change. Five passed against the
+original implementation:
+
+| # | Vector | Before | After |
+|---|---|---|---|
+| A4 | Read nonce from `__main__`, write the verdict file | **breach** | wrong |
+| A5 | Rebind `builtins.eval` | error | error (named) |
+| A6 | Rebind `builtins.bool` | error | error (named) |
+| A7 | Rebind `builtins.open` | wrong | error (named) |
+| A8 | Replace `__main__.emit` | **breach** | error |
+| A9 | Raise `SystemExit` during assert evaluation | wrong | wrong |
+| A11 | Lookup table keyed on the assert inputs | **breach** | wrong (hardcoded) |
+| A12 | `__eq__` true only for the real expected values | **breach** | wrong |
+| A13 | Rewrite the asserts list in `__main__` | wrong | wrong |
+| A14 | `atexit` hook writes a forged verdict | **breach** | wrong |
+| A15 | Hardcode the examples stated in the prompt | — | wrong |
+| A16 | SQL query hardcoding the fixture's names | — | wrong (hardcoded) |
+
+Zero breaches remain. Every row is a test in `tests/test_adversarial.py`.
 
 ---
 
@@ -28,15 +79,11 @@ This is the review's central question. The experiment's headline number is a
 false-green rate; if the *harness* can turn a wrong answer into a `correct`
 grade, that number measures the harness rather than the model.
 
-Three attacks were run against `grade_artifact` before any of the defences
-below existed. Two of them succeeded.
+### R1.1 / R1.5 — Forged verdicts (**two rounds, both were exploitable**)
 
-### R1.1 — Forged verdicts (**was exploitable**)
-
-**Attack.** The grader child ran the candidate's code in-process and printed
-its verdict to stdout, which the parent parsed as "last line of stdout". A
-candidate that printed a well-formed passing verdict and then terminated the
-interpreter before grading finished won outright:
+**Round one.** The grader child printed its verdict to stdout, which the parent
+parsed as "last line of stdout". A candidate that printed a well-formed passing
+verdict and terminated the interpreter before grading finished won outright:
 
 ```python
 import sys
@@ -44,48 +91,70 @@ print('{"outcome": "correct", "n_asserts": 7, "n_passed": 7, ...}')
 sys.exit(0)            # -> graded "correct"
 ```
 
-`os._exit(0)` did the same while also skipping every `finally` and `atexit`
-path. Both produced a **fully fabricated pass** on a task the candidate never
-attempted. `SystemExit` slipped through because it derives from
-`BaseException`, not `Exception`, so the `except Exception` around `exec` never
-saw it.
+`SystemExit` slipped through because it derives from `BaseException`, not
+`Exception`. The fix was a verdict file authenticated with a per-call nonce.
 
-**Fix** (`_grade_child.py`, `grade.py`):
+**Round two — the fix was largely theatre.** The nonce was stored as
+`__main__._NONCE` and the output path sat in `sys.argv[1]`, both inside the very
+interpreter running the candidate. Three vectors defeated it: read the nonce and
+write the file (A4), wrap `__main__.emit` (A8), or register an `atexit` hook
+that overwrites the verdict after grading finishes (A14).
 
-1. The verdict is written to a **file**, never stdout, so printing cannot
-   impersonate it.
-2. The parent generates a per-call **nonce**, passes it on stdin, and rejects
-   any verdict that does not carry it back. A candidate that never reads the
-   payload cannot produce an authenticated verdict.
-3. `exec` is guarded by `except BaseException`, so `SystemExit` is an error
-   outcome rather than an escape hatch.
+**Fix.** The verdict channel is now unreachable by ordinary means: `emit`, the
+output path and the nonce exist only as locals of `main`/`_bootstrap`, never as
+module attributes; `sys.argv` is truncated before candidate code runs; and the
+file is created `O_EXCL` so a second writer cannot silently replace a verdict
+that was already reported.
 
-A candidate that exits early now yields no verdict file at all, which grades
-`error` — the fail-closed direction.
+### R1.2 / R1.7 — Rigged comparisons (**two rounds**)
 
-### R1.2 — Rigged equality (**was exploitable**)
+**Round one.** Ground truth was a list of `<call> == <literal>` expressions. An
+artifact returning an object whose `__eq__` is unconditionally `True` satisfied
+all of them, passing T01, T02 and T07 — every task whose asserts are pure `==`.
+It failed elsewhere only because those tasks happen to use `is`, which is luck,
+not design. Patched with a sentinel canary.
 
-**Attack.** Ground truth is a list of `<call> == <literal>` expressions. An
-artifact returning an object whose `__eq__` is unconditionally `True` satisfies
-all of them:
+**Round two.** The canary only catches *unconditional* rigging. An `__eq__` that
+returns `True` for the real expected values and `False` for the sentinel walks
+straight past it (A12).
 
-```python
-class _Always:
-    def __eq__(self, other): return True
-def sort_versions(*a, **k): return _Always()   # -> graded "correct"
-```
+**Fix — structural comparison.** The oracle no longer calls the candidate's
+`__eq__` at all. A top-level comparison is split by AST: the left side evaluates
+in the candidate's namespace, the right in a clean one, and the two are compared
+as **canonical values** the grader computes itself from exactly-typed primitives.
+`type(x) is int`, not `isinstance` — a subclass that overrides equality is
+precisely the attack, so it canonicalises as opaque and cannot match. Numeric
+`int`/`float` equality is preserved, so a solution returning `7.0` where `7` is
+expected still passes (`test_int_and_float_still_compare_equal`).
 
-This passed on T01, T02 and T07 — every task whose asserts are pure `==`. It
-failed only on tasks that happen to use `is None` / `is False`, which is luck,
-not design.
+### R1.6 — Rebound builtins
 
-**Fix.** After all asserts pass, the child evaluates one **canary**: the first
-assert's left-hand side compared against a sentinel string that nothing
-legitimate can equal. If that comparison is true, equality is rigged and the
-asserts prove nothing, so the outcome is `error`. The canary runs *last*, so it
-cannot perturb the state-dependent tasks (T05), and
-`test_canary_does_not_reject_honest_solutions` confirms it costs no true
-positives across all ten tasks.
+`builtins.eval`, `bool` and `open` are all used by the grader's own evaluation
+loop, so rebinding one compromises the oracle. A snapshot is taken before the
+candidate runs and checked after; tampering is an `error` naming the rebound
+builtin, rather than a result.
+
+### R1.8 — Hardcoding to the assert inputs (**the realistic one**)
+
+Every defence above concerns an artifact attacking the harness. This one is a
+shortcut a real model can take without any such intent: a lookup table keyed on
+the exact inputs the asserts use, or — for SQL — a query written around the
+fixture's data. It passed every task it was tried on.
+
+This is the same silent-failure class the experiment exists to measure, and the
+harness had it: the oracle could not distinguish "solved the requirement" from
+"matched the examples".
+
+**Fix — held-out asserts.** Every task carries a `hidden_asserts` set drawn from
+inputs that appear nowhere in the prompt, and SQL tasks carry a second fixture
+against which the same query is re-run. An artifact is `correct` only if it
+passes both phases. Failing only in the held-out phase is recorded as
+`hardcoded=True` and reported as `hardcode_rate`, a validity metric published
+beside pass@1 — because if that rate is high, pass@1 is measuring
+example-matching and should not be read as anything else.
+
+`test_hidden_asserts_use_inputs_absent_from_the_prompt` enforces the property
+that makes the held-out set held out.
 
 ### R1.3 / R1.4 — Extraction and verdict parsing (**clear**)
 
@@ -161,22 +230,29 @@ Because n = 10, this section is expected to matter. If a conclusion does flip,
 it will be reported as sensitive to task selection in the README rather than
 dropped.
 
-## R5 — Float noise on a hypothesis boundary (**was a live bug**)
+## R5 — Float noise on a hypothesis boundary (**was a live bug, twice**)
 
-Found while reviewing the sensitivity output, not by a test. With 13/20 and
-11/20 correct, `100 * (0.65 - 0.55)` evaluates to `9.999999999999998`. H2's
-condition is `Δpass@1 < 10pp`, so a true value of exactly 10 — which does *not*
-satisfy the condition — was being reported **SUPPORTED**, and the printed
-`Δ=+10.0pp` beside the threshold `< 10pp` looked like a typo rather than a bug.
+Found while reviewing sensitivity output, not by a test. With 13/20 and 11/20
+correct, `100 * (0.65 - 0.55)` evaluates to `9.999999999999998`. H2's condition
+is `Δpass@1 < 10pp`, so a true value of exactly 10 — which does *not* satisfy the
+condition — was reported **SUPPORTED**, and the printed `Δ=+10.0pp` beside the
+threshold `< 10pp` looked like a typo rather than a bug.
 
-Fixed by rounding the delta at computation time in `metrics.summarize` and
-printing two decimals near thresholds. Regression:
-`test_h2_boundary_is_strict_not_float_noisy` and
-`test_delta_is_rounded_so_float_noise_cannot_flip_a_verdict`.
+The first fix rounded that one metric. Probing the rest showed the same class
+elsewhere: an ECE of exactly 0.15 computes as `0.15000000000000002`, so H3's
+`ECE > 0.15` reported **SUPPORTED** on a value that does not satisfy it. The
+`cost_multiplier` ratio and the Wilson bound have the same exposure.
 
-The general lesson is recorded because it applies to every threshold in
-RESEARCH.md: a hypothesis whose verdict is decided by an exact comparison must
-not be fed unrounded floating-point arithmetic.
+**Fix.** Every threshold comparison goes through `hypotheses.compare`, which
+treats a value within `1e-9` of the threshold as sitting exactly on it and lets
+the operator decide from there — `>=` and `<=` hold on the boundary, `>` and `<`
+do not. No threshold moved; noise simply can no longer pick a side. Verdicts
+decided within that tolerance are flagged `on_boundary` and rendered as
+"decided exactly at the threshold", so a knife-edge result does not read like a
+comfortable one.
+
+The general lesson applies to every threshold in RESEARCH.md: a verdict decided
+by an exact comparison must not be fed unrounded floating-point arithmetic.
 
 ## R6 — Executing model-generated code
 

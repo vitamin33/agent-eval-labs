@@ -223,6 +223,17 @@ potential *harness-manufactured* false green, so it is measured, not swallowed.
 - **Formula:** `verdict_parse_failure_rate = |{r : verdict(r) is null}| / |{r in self_verify}|`
 - Gate G4 fails if this exceeds 0.02.
 
+### hardcode_rate
+
+Validity metric added in Phase 5 (see Amendments). Fraction of graded artifacts
+that satisfied every **visible** assert and then failed a **held-out** one — the
+signature of a solution written against the stated examples rather than the
+requirement.
+
+- **Formula:** `hardcode_rate = |{r : passes all visible asserts AND fails a hidden assert}| / |{r : produced a gradable artifact}|`
+- A high value invalidates pass@1 as a measure of the requirement, so it is
+  reported beside it rather than buried.
+
 ### Wilson 95% confidence interval
 
 Applied to every rate above. Normal-approximation (Wald) intervals are wrong at
@@ -439,3 +450,40 @@ business_days('2024-03-05', '2024-03-04') == 0
 4. **Live runs are not seed-reproducible** (see above).
 5. **The harness could manufacture false greens** through answer-extraction
    bugs. Phase 5 is dedicated to attacking exactly this.
+
+## Amendments
+
+The design above was frozen at Phase 1 and is not edited to match results. These
+are changes made afterwards, each with its date, reason and effect.
+
+### A1 — held-out asserts (Phase 5, adversarial review)
+
+**Reason.** The Phase 5 attack probe found that an artifact containing a lookup
+table keyed on the exact assert inputs passed every task it was tried on. The
+oracle could not distinguish "solved the requirement" from "matched the
+examples", which is the same silent-failure class the experiment exists to
+measure — so the harness had it too.
+
+**Change.** Every task gains a `hidden_asserts` set, never shown in the prompt
+and drawn from different inputs; SQL tasks additionally gain a
+`hidden_fixture`, and the candidate's query is re-run against it. An artifact is
+`correct` only if it passes both phases. The visible assert specs above are
+unchanged, so every count in the task design still matches.
+
+**Effect on results.** Strictly stricter: some artifacts that would have graded
+`correct` now grade `wrong`. Baseline pass@1 can therefore only move down, which
+is accounted for in Phase 4 calibration.
+
+### A2 — boundary-aware threshold comparison (Phase 5)
+
+**Reason.** Two hypothesis verdicts were decided by floating-point noise rather
+than by evidence: `100 * (0.65 - 0.55)` is `9.999999999999998`, and an ECE of
+exactly 0.15 computes as `0.15000000000000002`. Both reported the wrong verdict.
+
+**Change.** All threshold comparisons go through `hypotheses.compare`, which
+treats a value within `1e-9` of the threshold as sitting exactly on it and lets
+the operator decide from there (`>=` holds, `>` does not). Verdicts decided at
+the boundary are flagged as such in the output.
+
+**Effect on results.** No threshold moved. A verdict can no longer be produced
+by rounding error, and a knife-edge verdict is now visibly a knife-edge verdict.

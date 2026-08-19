@@ -108,3 +108,56 @@ def test_undetermined_is_never_silently_treated_as_supported():
 
 def _verdict(summary, hid):
     return next(r for r in hypotheses.evaluate(summary) if r.id == hid).verdict
+
+
+# --- boundary-aware comparison (REVIEW.md R5) ------------------------------ #
+
+
+@pytest.mark.parametrize(
+    "value,op,threshold,holds,boundary",
+    [
+        # The two noise values observed for real.
+        (100 * (0.65 - 0.55), "<", 10.0, False, True),
+        (0.1 + 0.05, ">", 0.15, False, True),
+        # Exact boundary: >= holds, > does not.
+        (1.8, ">=", 1.8, True, True),
+        (0.15, ">", 0.15, False, True),
+        (10.0, "<", 10.0, False, True),
+        (20.0, ">=", 20.0, True, True),
+        # Genuinely off the boundary: decided normally.
+        (0.16, ">", 0.15, True, False),
+        (0.14, ">", 0.15, False, False),
+        (1.9, ">=", 1.8, True, False),
+        (1.7, ">=", 1.8, False, False),
+    ],
+)
+def test_compare_is_not_decided_by_float_noise(value, op, threshold, holds, boundary):
+    assert hypotheses.compare(value, op, threshold) == (holds, boundary)
+
+
+def test_ece_noise_cannot_support_h3():
+    """Regression: an ECE of exactly 0.15 computes as 0.15000000000000002."""
+    noisy = 0.1 + 0.05
+    assert noisy > 0.15  # plain comparison gets it wrong
+    s = _summary(ece=noisy)
+    h3 = next(r for r in hypotheses.evaluate(s) if r.id == "H3")
+    assert h3.verdict == hypotheses.FALSIFIED
+    assert h3.on_boundary is True
+
+
+def test_boundary_verdicts_are_surfaced_in_the_table():
+    s = _summary(ece=0.15)
+    md = hypotheses.to_markdown(hypotheses.evaluate(s))
+    assert "decided exactly at the threshold" in md
+
+
+def test_comfortable_verdicts_are_not_flagged_as_boundary():
+    s = _summary(ece=0.31)
+    h3 = next(r for r in hypotheses.evaluate(s) if r.id == "H3")
+    assert h3.verdict == hypotheses.SUPPORTED and h3.on_boundary is False
+
+
+def test_cost_multiplier_boundary_is_inclusive():
+    """H2 says cost >= 1.8x, so exactly 1.8x satisfies it."""
+    s = _summary(delta_pass_at_1_pp=2.0, cost_multiplier=1.7999999999999998)
+    assert _verdict(s, "H2") == hypotheses.SUPPORTED

@@ -21,6 +21,11 @@ TASK = {
         "sort_versions([]) == []",
         "sort_versions(['1.0.0']) == ['1.0.0']",
     ],
+    "hidden_asserts": [
+        "sort_versions(['0.0.1', '0.0.20', '0.0.3']) == ['0.0.1', '0.0.3', '0.0.20']",
+        "sort_versions(['3.2.1', '3.2.10', '3.10.0']) == ['3.2.1', '3.2.10', '3.10.0']",
+        "sort_versions(['1.2.3', '1.2.3']) == ['1.2.3', '1.2.3']",
+    ],
     "reference": '''
 def sort_versions(versions):
     return sorted(versions, key=lambda v: tuple(int(p) for p in v.split(".")))

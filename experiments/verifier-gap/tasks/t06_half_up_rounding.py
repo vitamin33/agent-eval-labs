@@ -29,6 +29,12 @@ TASK = {
     ],
     # Decimal-from-string is the only way to hit the documented values: the binary
     # float 2.675 is actually 2.67499999..., so Decimal(x) directly still gives 2.67.
+    "hidden_asserts": [
+        "round_money(3.045) == 3.05",
+        "round_money(0.005) == 0.01",
+        "round_money(-2.675) == -2.68",
+        "round_money(7.999) == 8.0",
+    ],
     "reference": '''
 from decimal import Decimal, ROUND_HALF_UP
 

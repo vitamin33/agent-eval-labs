@@ -48,7 +48,9 @@ def test_required_fields(task):
 def test_reference_solution_passes(task):
     g = grade_artifact(task["reference"], task)
     assert g.outcome == "correct", f"{task['id']}: {g.detail} on {g.first_failure}"
-    assert g.n_passed == len(task["asserts"])
+    # n_passed spans both phases: the visible asserts and the held-out ones.
+    assert g.n_passed == len(task["asserts"]) + len(task.get("hidden_asserts", []))
+    assert g.hardcoded is False
 
 
 @pytest.mark.parametrize("task", TASKS, ids=lambda t: t["id"])

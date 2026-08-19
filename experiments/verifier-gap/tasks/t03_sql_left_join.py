@@ -8,6 +8,19 @@ INSERT INTO orders (id, customer_id, total) VALUES
     (12, 3, 15.0);
 """
 
+# A second, differently-shaped dataset. The same query must work on it, which
+# is what a query written around the first fixture's data cannot do.
+HIDDEN_FIXTURE = """
+CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, total REAL);
+INSERT INTO customers (id, name) VALUES (1, 'Bob'), (2, 'Cleo'), (3, 'Dan'), (4, 'Eve');
+INSERT INTO orders (id, customer_id, total) VALUES
+    (20, 1, 5.0),
+    (21, 3, 6.0),
+    (22, 3, 7.0),
+    (23, 3, 8.0);
+"""
+
 TASK = {
     "id": "T03",
     "name": "sql_left_join_count",
@@ -36,6 +49,12 @@ TASK = {
         "dict(rows)['Grace'] is not None",
         "[r[0] for r in rows] == ['Ada', 'Grace', 'Linus']",
         "all(isinstance(r[1], int) for r in rows)",
+    ],
+    "hidden_fixture": HIDDEN_FIXTURE,
+    "hidden_asserts": [
+        "rows2 == [('Bob', 1), ('Cleo', 0), ('Dan', 3), ('Eve', 0)]",
+        "len(rows2) == 4",
+        "dict(rows2)['Eve'] == 0",
     ],
     "reference": """
 SELECT c.name, COUNT(o.id) AS order_count

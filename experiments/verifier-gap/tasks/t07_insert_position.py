@@ -24,6 +24,12 @@ TASK = {
         "insert_position([], 4) == 0",
         "insert_position([2, 2], 2) == 0",
     ],
+    "hidden_asserts": [
+        "insert_position([1, 1, 1, 1], 1) == 0",
+        "insert_position([2, 4, 6, 8], 5) == 2",
+        "insert_position([7], 7) == 0",
+        "insert_position([1, 2, 3, 4, 5, 6, 7], 8) == 7",
+    ],
     "reference": '''
 def insert_position(sorted_list, target):
     lo, hi = 0, len(sorted_list)

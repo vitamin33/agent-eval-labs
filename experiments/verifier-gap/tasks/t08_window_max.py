@@ -23,6 +23,13 @@ TASK = {
         "max_window_sum([], 1) is None",
         "max_window_sum([-5, -1, -9], 2) == -6",
     ],
+    "hidden_asserts": [
+        "max_window_sum([3, 3, 3], 1) == 3",
+        "max_window_sum([0, 0, 100], 3) == 100",
+        "max_window_sum([2, -1, 2, -1, 2], 3) == 3",
+        "max_window_sum([4], 1) == 4",
+        "max_window_sum([1, 2, 3], 4) is None",
+    ],
     "reference": '''
 def max_window_sum(nums, k):
     if not nums or k > len(nums):

@@ -23,6 +23,11 @@ TASK = {
         "add_item('c', ['x']) == ['x', 'c']",
         "(add_item('a'), add_item('b'))[1] == ['b']",
     ],
+    "hidden_asserts": [
+        "add_item('z') == ['z']",
+        "add_item('q', ['p']) == ['p', 'q']",
+        "add_item(1) == [1]",
+    ],
     "reference": '''
 def add_item(item, bucket=None):
     if bucket is None:

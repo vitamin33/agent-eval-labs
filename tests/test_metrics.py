@@ -153,3 +153,43 @@ def test_load_records_rejects_malformed_json(tmp_path):
     p.write_text('{"a": 1}\nnot json\n')
     with pytest.raises(ValueError, match="line 2|:2:"):
         metrics.load_records(p)
+
+
+# --- hardcode rate (validity metric added in Phase 5) ---------------------- #
+
+
+def graded(outcome, hardcoded=False, **kw):
+    return make_record(
+        grade_initial={"outcome": outcome, "hardcoded": hardcoded},
+        truth_initial="correct" if outcome == "correct" else "wrong",
+        truth_final="correct" if outcome == "correct" else "wrong",
+        **kw,
+    )
+
+
+def test_hardcode_rate_counts_only_held_out_failures():
+    records = [
+        graded("wrong", hardcoded=True),
+        graded("wrong", hardcoded=False),
+        graded("correct"),
+        graded("correct"),
+    ]
+    r = metrics.hardcode_rate(records)
+    assert (r.numerator, r.denominator) == (1, 4)
+
+
+def test_hardcode_rate_excludes_ungradable_artifacts():
+    """A refusal never had a chance to hardcode; it must not dilute the rate."""
+    records = [graded("no_answer"), graded("error"), graded("wrong", hardcoded=True)]
+    r = metrics.hardcode_rate(records)
+    assert (r.numerator, r.denominator) == (1, 1)
+
+
+def test_hardcode_rate_is_none_when_nothing_was_graded():
+    assert metrics.hardcode_rate([graded("no_answer")]).value is None
+
+
+def test_hardcode_rate_reaches_the_summary(dry_run_records):
+    s = metrics.summarize(dry_run_records, k=5)
+    assert "hardcode_rate" in s
+    assert s["hardcode_rate"]["n"] > 0

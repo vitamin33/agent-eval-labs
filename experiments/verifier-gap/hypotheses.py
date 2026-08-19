@@ -16,6 +16,32 @@ from dataclasses import dataclass
 
 SUPPORTED, FALSIFIED, UNDETERMINED = "SUPPORTED", "FALSIFIED", "UNDETERMINED"
 
+# Every metric here is the end of a chain of float arithmetic, so a value whose
+# true magnitude IS the threshold can arrive as threshold +/- 1e-16 and decide a
+# verdict by rounding error rather than by evidence. Observed twice for real:
+# 100*(0.65-0.55) is 9.999999999999998, and an ECE of exactly 0.15 computes as
+# 0.15000000000000002. Anything within this tolerance is treated as sitting
+# exactly ON the threshold, and the operator's own semantics then decide.
+BOUNDARY_EPS = 1e-9
+
+
+def compare(value: float, op: str, threshold: float) -> tuple[bool, bool]:
+    """Return (holds, on_boundary) for `value <op> threshold`.
+
+    `>=` and `<=` are satisfied on the boundary; `>` and `<` are not. That is
+    ordinary mathematics — the point is that float noise can no longer decide
+    which side of the line a boundary value falls on.
+    """
+    on_boundary = abs(value - threshold) <= BOUNDARY_EPS
+    if on_boundary:
+        return op in (">=", "<=", "=="), True
+    return {
+        "<": value < threshold,
+        "<=": value <= threshold,
+        ">": value > threshold,
+        ">=": value >= threshold,
+    }[op], False
+
 THRESHOLDS = {
     "H1_false_green_rate_min": 0.15,
     "H2_delta_pass_at_1_max_pp": 10.0,
@@ -34,6 +60,10 @@ class Result:
     verdict: str
     observed: str
     threshold: str
+    # True when the observed value sat within BOUNDARY_EPS of the threshold, so
+    # the verdict was decided exactly at the line. Surfaced, never hidden: a
+    # knife-edge verdict should not read like a comfortable one.
+    on_boundary: bool = False
 
 
 def evaluate(summary: dict) -> list[Result]:
@@ -48,12 +78,12 @@ def evaluate(summary: dict) -> list[Result]:
                           f">= {T['H1_false_green_rate_min']:.0%}"))
     else:
         # Falsified when the whole interval sits below the threshold.
-        verdict = FALSIFIED if fg["ci_high"] < T["H1_false_green_rate_min"] else (
-            SUPPORTED if fg["value"] >= T["H1_false_green_rate_min"] else UNDETERMINED
-        )
+        below, b1 = compare(fg["ci_high"], "<", T["H1_false_green_rate_min"])
+        meets, b2 = compare(fg["value"], ">=", T["H1_false_green_rate_min"])
+        verdict = FALSIFIED if below else (SUPPORTED if meets else UNDETERMINED)
         out.append(Result("H1", "false-green rate >= 15%", verdict,
                           f"{fg['value']:.1%} [{fg['ci_low']:.1%}, {fg['ci_high']:.1%}]",
-                          f">= {T['H1_false_green_rate_min']:.0%}"))
+                          f">= {T['H1_false_green_rate_min']:.0%}", b1 or b2))
 
     # H2 — small accuracy gain at large cost. Both conjuncts must hold.
     delta, mult = summary["delta_pass_at_1_pp"], summary["cost_multiplier"]
@@ -61,12 +91,13 @@ def evaluate(summary: dict) -> list[Result]:
         out.append(Result("H2", "Δpass@1 < 10pp AND cost >= 1.8x", UNDETERMINED,
                           "missing delta or cost", "both"))
     else:
-        holds = delta < T["H2_delta_pass_at_1_max_pp"] and mult >= T["H2_cost_multiplier_min"]
+        small_gain, b1 = compare(delta, "<", T["H2_delta_pass_at_1_max_pp"])
+        costly, b2 = compare(mult, ">=", T["H2_cost_multiplier_min"])
         out.append(Result("H2", "Δpass@1 < 10pp AND cost >= 1.8x",
-                          SUPPORTED if holds else FALSIFIED,
+                          SUPPORTED if (small_gain and costly) else FALSIFIED,
                           f"Δ={delta:+.2f}pp, cost={mult:.2f}x",
                           f"< {T['H2_delta_pass_at_1_max_pp']:.0f}pp and "
-                          f">= {T['H2_cost_multiplier_min']}x"))
+                          f">= {T['H2_cost_multiplier_min']}x", b1 or b2))
 
     # H3 — the confidence number does not track correctness.
     ece = summary["ece"]
@@ -74,9 +105,9 @@ def evaluate(summary: dict) -> list[Result]:
         out.append(Result("H3", "ECE > 0.15", UNDETERMINED, "no parsed confidences",
                           f"> {T['H3_ece_min']}"))
     else:
-        out.append(Result("H3", "ECE > 0.15",
-                          SUPPORTED if ece > T["H3_ece_min"] else FALSIFIED,
-                          f"{ece:.3f}", f"> {T['H3_ece_min']}"))
+        holds, b = compare(ece, ">", T["H3_ece_min"])
+        out.append(Result("H3", "ECE > 0.15", SUPPORTED if holds else FALSIFIED,
+                          f"{ece:.4f}", f"> {T['H3_ece_min']}", b))
 
     # H4 — per-run accuracy overstates reliability.
     base = summary["by_mode"]["baseline"]
@@ -85,11 +116,12 @@ def evaluate(summary: dict) -> list[Result]:
         out.append(Result("H4", "baseline pass@1 − pass^k >= 20pp", UNDETERMINED,
                           "missing pass rates", f">= {T['H4_reliability_gap_min_pp']:.0f}pp"))
     else:
-        gap = round(100 * (p1 - pk), 9)
+        gap = 100 * (p1 - pk)
+        holds, b = compare(gap, ">=", T["H4_reliability_gap_min_pp"])
         out.append(Result("H4", "baseline pass@1 − pass^k >= 20pp",
-                          SUPPORTED if gap >= T["H4_reliability_gap_min_pp"] else FALSIFIED,
+                          SUPPORTED if holds else FALSIFIED,
                           f"{gap:.2f}pp ({p1:.1%} vs {pk:.1%})",
-                          f">= {T['H4_reliability_gap_min_pp']:.0f}pp"))
+                          f">= {T['H4_reliability_gap_min_pp']:.0f}pp", b))
 
     # H5 — false greens arrive with high confidence.
     conf, n_fg = summary["mean_confidence_on_false_greens"], summary["n_false_greens"]
@@ -98,9 +130,10 @@ def evaluate(summary: dict) -> list[Result]:
                           f"only {n_fg} false greens (need >= {T['H5_min_false_greens']})",
                           f">= {T['H5_mean_confidence_min']:.0f}"))
     else:
+        holds, b = compare(conf, ">=", T["H5_mean_confidence_min"])
         out.append(Result("H5", "mean confidence on false greens >= 70",
-                          SUPPORTED if conf >= T["H5_mean_confidence_min"] else FALSIFIED,
-                          f"{conf:.1f} (n={n_fg})", f">= {T['H5_mean_confidence_min']:.0f}"))
+                          SUPPORTED if holds else FALSIFIED,
+                          f"{conf:.1f} (n={n_fg})", f">= {T['H5_mean_confidence_min']:.0f}", b))
 
     return out
 
@@ -108,5 +141,6 @@ def evaluate(summary: dict) -> list[Result]:
 def to_markdown(results: list[Result]) -> str:
     lines = ["| Hypothesis | Claim | Threshold | Observed | Verdict |", "|---|---|---|---|---|"]
     for r in results:
-        lines.append(f"| {r.id} | {r.claim} | {r.threshold} | {r.observed} | **{r.verdict}** |")
+        note = " <br><sub>decided exactly at the threshold</sub>" if r.on_boundary else ""
+        lines.append(f"| {r.id} | {r.claim} | {r.threshold} | {r.observed} | **{r.verdict}**{note} |")
     return "\n".join(lines)

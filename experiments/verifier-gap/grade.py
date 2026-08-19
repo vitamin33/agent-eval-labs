@@ -46,6 +46,9 @@ class Grade:
     n_asserts: int = 0
     n_passed: int = 0
     extraction_reason: str = ""
+    # True when the artifact satisfied every visible case and then failed a
+    # held-out one — a solution written against the examples, not the spec.
+    hardcoded: bool = False
 
     @property
     def is_correct(self) -> bool:
@@ -78,10 +81,12 @@ def grade_artifact(code: str, task: dict, timeout_s: int = 10) -> Grade:
         "code": code,
         "entrypoint": task.get("entrypoint"),
         "asserts": task["asserts"],
+        "hidden_asserts": task.get("hidden_asserts", []),
         "fixture": task.get("fixture", ""),
+        "hidden_fixture": task.get("hidden_fixture", ""),
         "nonce": nonce,
     }
-    n_asserts = len(task["asserts"])
+    n_asserts = len(task["asserts"]) + len(task.get("hidden_asserts", []))
 
     with tempfile.TemporaryDirectory(prefix="aelabs-grade-") as tmpdir:
         verdict_path = Path(tmpdir) / "verdict.json"
@@ -122,4 +127,5 @@ def grade_artifact(code: str, task: dict, timeout_s: int = 10) -> Grade:
         first_failure=result.get("first_failure"),
         n_asserts=result.get("n_asserts", 0),
         n_passed=result.get("n_passed", 0),
+        hardcoded=bool(result.get("hardcoded", False)),
     )

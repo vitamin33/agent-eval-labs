@@ -610,6 +610,37 @@ def gate_g3() -> list[Check]:
         )
     )
 
+    # --- the attack probe must find no way to forge a pass ---------------- #
+    probe = ROOT / "tools" / "attack_probe.py"
+    if probe.exists():
+        proc = run([interpreter(), str(probe)])
+        breaches = [
+            ln for ln in proc.stdout.splitlines() if "BREACH" in ln
+        ]
+        checks.append(
+            Check(
+                "attack probe finds no forged-pass vector",
+                proc.returncode == 0 and not breaches,
+                "\n".join(breaches) or (proc.stdout + proc.stderr)[-400:],
+            )
+        )
+    else:
+        checks.append(Check("attack probe present", False, "tools/attack_probe.py missing"))
+
+    # --- held-out asserts exist for every task ---------------------------- #
+    proc = _run_py(
+        "from tasks import load_tasks;"
+        "bad=[t['id'] for t in load_tasks() if len(t.get('hidden_asserts',[]))<3];"
+        "print('MISSING:'+','.join(bad) if bad else 'ok')"
+    )
+    checks.append(
+        Check(
+            "every task has held-out asserts",
+            proc.returncode == 0 and "ok" in proc.stdout,
+            (proc.stdout + proc.stderr)[-300:],
+        )
+    )
+
     # --- prompt diff, checked independently of the test suite ------------- #
     proc = _run_py(
         "import prompts;"

@@ -154,6 +154,22 @@ def verifier_accuracy(records: list[dict]) -> Rate:
     return Rate(len(agree), len(judged))
 
 
+def hardcode_rate(records: list[dict]) -> Rate:
+    """Fraction of graded artifacts that satisfied every visible case and then
+    failed a held-out one.
+
+    A validity metric, not a model-quality one: a high rate means the tasks are
+    solvable by writing to the stated examples, which would make pass@1 measure
+    example-matching rather than the requirement.
+    """
+    graded = [
+        r for r in records
+        if r.get("grade_initial", {}).get("outcome") in ("correct", "wrong")
+    ]
+    hardcoded = [r for r in graded if r.get("grade_initial", {}).get("hardcoded")]
+    return Rate(len(hardcoded), len(graded))
+
+
 def verdict_parse_failure_rate(records: list[dict]) -> Rate:
     sv = _mode(records, "self_verify")
     return Rate(sum(1 for r in sv if r["verdict"] is None), len(sv))
@@ -259,6 +275,7 @@ def summarize(records: list[dict], k: int = 5) -> dict:
         "false_red_rate": false_red_rate(records).to_dict(),
         "verifier_accuracy": verifier_accuracy(records).to_dict(),
         "verdict_parse_failure_rate": verdict_parse_failure_rate(records).to_dict(),
+        "hardcode_rate": hardcode_rate(records).to_dict(),
         "delta_pass_at_1_pp": delta,
         "cost_multiplier": (cost_sv / cost_base) if cost_base else None,
         "ece": ece,

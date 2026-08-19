@@ -9,6 +9,18 @@ INSERT INTO orders (id, product_id, qty) VALUES
     (102, NULL, 7);
 """
 
+# Different products, different NULL placement. A query that hardcodes names
+# or leans on the first fixture's shape fails here.
+HIDDEN_FIXTURE = """
+CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE orders (id INTEGER PRIMARY KEY, product_id INTEGER, qty INTEGER);
+INSERT INTO products (id, name) VALUES (1, 'Alpha'), (2, 'Beta'), (3, 'Gamma');
+INSERT INTO orders (id, product_id, qty) VALUES
+    (200, 3, 1),
+    (201, NULL, 2),
+    (202, NULL, 9);
+"""
+
 TASK = {
     "id": "T04",
     "name": "sql_not_in_null",
@@ -36,6 +48,12 @@ TASK = {
         "('Gizmo',) not in rows",
         "('Cog',) not in rows",
         "all(len(r) == 1 for r in rows)",
+    ],
+    "hidden_fixture": HIDDEN_FIXTURE,
+    "hidden_asserts": [
+        "sorted(rows2) == [('Alpha',), ('Beta',)]",
+        "len(rows2) == 2",
+        "('Gamma',) not in rows2",
     ],
     "reference": """
 SELECT p.name

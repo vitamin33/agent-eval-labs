@@ -325,6 +325,8 @@ def results_markdown(summary: dict, source: str) -> str:
         f"| cost multiplier | "
         f"{'%.2fx' % summary['cost_multiplier'] if summary['cost_multiplier'] else 'n/a'} |",
         f"| verdict parse failure rate | {_r(summary['verdict_parse_failure_rate'])} |",
+        f"| hardcode rate (passed visible, failed held-out) | "
+        f"{_r(summary.get('hardcode_rate'))} |",
         "",
         "### Per-task breakdown",
         "",

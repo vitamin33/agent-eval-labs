@@ -25,6 +25,12 @@ TASK = {
         "business_days('2023-12-29', '2024-01-01') == 2",
         "business_days('2024-03-05', '2024-03-04') == 0",
     ],
+    "hidden_asserts": [
+        "business_days('2024-07-01', '2024-07-05') == 5",
+        "business_days('2024-07-06', '2024-07-07') == 0",
+        "business_days('2020-02-27', '2020-03-02') == 3",
+        "business_days('2024-12-30', '2025-01-02') == 4",
+    ],
     "reference": '''
 from datetime import date, timedelta
 

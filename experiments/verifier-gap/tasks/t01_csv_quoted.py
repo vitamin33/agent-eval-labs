@@ -23,6 +23,12 @@ TASK = {
         "parse_csv_line('') == ['']",
         "parse_csv_line('\"\",x') == ['', 'x']",
     ],
+    "hidden_asserts": [
+        "parse_csv_line('x,\"y,z\",w') == ['x', 'y,z', 'w']",
+        "parse_csv_line('\"a\"\"b\"') == ['a\"b']",
+        "parse_csv_line(',') == ['', '']",
+        "parse_csv_line('one') == ['one']",
+    ],
     "reference": '''
 def parse_csv_line(line):
     fields, cur, i, in_q = [], [], 0, False
