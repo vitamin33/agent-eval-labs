@@ -134,7 +134,9 @@ class DeepSeekProvider:
     def __init__(self, model, max_tokens, sampling, base_url, api_key):
         from openai import OpenAI  # imported here so dry-run needs no package
 
-        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=300.0, max_retries=3)
+        # A single T01 generation takes ~280s of reasoning, so a 300s timeout
+        # would fail it intermittently. Generous, with retries on top.
+        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=1200.0, max_retries=3)
         self.model = model
         self.max_tokens = max_tokens
         self.sampling = sampling

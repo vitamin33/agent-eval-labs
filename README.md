@@ -151,7 +151,7 @@ and is byte-identical on every invocation.
 The real experiment (~150 calls, well under $1 at current DeepSeek prices):
 
 ```bash
-echo 'DEEPSEEK_API_KEY=sk-...' > .env && chmod 600 .env
+cp .env.example .env && chmod 600 .env   # then add your key
 make run-live      # ~150 calls
 make report        # regenerates the table and charts from the newest run
 python gates.py --gate G4

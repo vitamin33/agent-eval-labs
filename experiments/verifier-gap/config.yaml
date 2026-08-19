@@ -26,12 +26,19 @@ temperature_unsupported_models:
 temperature: 0.0
 
 # DeepSeek v4 models are reasoning models: most completion tokens are reasoning
-# tokens that never appear in the response. Measured on this task set,
-# v4-flash spends ~270-350 reasoning tokens before writing ~300 characters of
-# answer, and v4-pro exceeds 2048 reasoning tokens and returns an EMPTY
-# response. 4096 leaves headroom so a truncated answer is not silently graded
-# as a refusal. See `truncation_rate`, which gate G4 enforces.
-max_tokens: 4096
+# tokens that never appear in the response, so a budget sized for the answer
+# returns an EMPTY completion with finish_reason="length" — which this harness
+# grades as a refusal and would score as model failure.
+#
+# Measured on this task set (deepseek-v4-flash, generation call):
+#   8 of 10 tasks     112 -  2,510 tokens,   2-21s
+#   T09              11,375 tokens (11,270 reasoning),  103s
+#   T01              30,873 tokens (30,579 reasoning),  280s  <- 294 visible
+# T01 truncated at both 4096 and 16384, emitting nothing at all. 49152 leaves
+# ~59% headroom over the worst observed case; unused budget costs nothing since
+# billing is per token produced. See CALIBRATION.md and truncation_rate, which
+# gate G4 enforces at 2%.
+max_tokens: 49152
 
 # --- matrix ---------------------------------------------------------------- #
 runs_per_cell: 5          # k, for pass^k
