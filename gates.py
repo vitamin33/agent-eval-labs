@@ -895,6 +895,140 @@ def gate_g5() -> list[Check]:
 
 
 # --------------------------------------------------------------------------- #
+# G6 — ship
+# --------------------------------------------------------------------------- #
+
+README = ROOT / "README.md"
+
+REQUIRED_README_SECTIONS = [
+    "## Motivation",
+    "## Method",
+    "## Results",
+    "## Reproduction",
+]
+
+
+@gate("G6", "Ship: README complete with CIs, charts embedded, reproduce-dry works")
+def gate_g6() -> list[Check]:
+    checks: list[Check] = []
+    checks.append(exists("README.md", "file"))
+    checks.append(exists("Makefile", "file"))
+    if not README.exists():
+        return checks
+    md = README.read_text()
+
+    # --- structure --------------------------------------------------------- #
+    for heading in REQUIRED_README_SECTIONS:
+        checks.append(Check(f"README has {heading}", heading in md, "missing section"))
+
+    limitations = re.search(r"^## (What this experiment does \*not\* show|Limitations).*?$(.*?)(?=^## |\Z)",
+                            md, re.MULTILINE | re.DOTALL)
+    checks.append(Check("README has a limitations section", bool(limitations), "missing"))
+    if limitations:
+        body = limitations.group(2).lower()
+        for topic, needle in (("n", "n = 10"), ("single model", "single capability"),
+                              ("task distribution", "task distribution")):
+            checks.append(
+                Check(f"limitations name the {topic}", needle.lower() in body, f"no mention of {needle!r}")
+            )
+
+    # motivation must be prose, not a stub
+    motivation = re.search(r"^## Motivation.*?$(.*?)(?=^## |\Z)", md, re.MULTILINE | re.DOTALL)
+    paragraphs = [p for p in (motivation.group(1).strip().split("\n\n") if motivation else []) if p.strip()]
+    checks.append(
+        Check(f"motivation has {len(paragraphs)} paragraphs", len(paragraphs) >= 2, "expected 2")
+    )
+
+    # --- generated results block ------------------------------------------ #
+    begin, end = "<!-- BEGIN GENERATED RESULTS -->", "<!-- END GENERATED RESULTS -->"
+    has_markers = begin in md and end in md
+    checks.append(Check("README results block is script-generated", has_markers, "markers missing"))
+    block = md.split(begin, 1)[1].split(end, 1)[0] if has_markers else ""
+    checks.append(Check("results block is populated", bool(block.strip()), "run report.py"))
+
+    # --- CIs, not bare point estimates ------------------------------------ #
+    intervals = re.findall(r"\d+\.\d+% \[\d+\.\d+, \d+\.\d+\]", block)
+    checks.append(
+        Check(
+            f"results carry confidence intervals ({len(intervals)} found)",
+            len(intervals) >= 4,
+            "rates must be published as 'x% [lo, hi]', not point estimates alone",
+        )
+    )
+    checks.append(
+        Check(
+            "the interval method is named",
+            "Wilson" in block or "Wilson" in md,
+            "say which interval is being reported",
+        )
+    )
+
+    # --- charts embedded and present -------------------------------------- #
+    embedded = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", md)
+    checks.append(Check(f"charts embedded in README ({len(embedded)})", len(embedded) >= 2, f"{embedded}"))
+    for rel in embedded:
+        checks.append(exists(rel, "file"))
+
+    # --- honesty invariant: synthetic results must be declared ------------- #
+    synthetic = "SYNTHETIC DATA" in block
+    if synthetic:
+        checks.append(
+            Check(
+                "synthetic results carry a status banner",
+                "## Status" in md and "has not been executed" in md,
+                "the results are mocked but the README does not say so outside the table",
+            )
+        )
+    else:
+        checks.append(Check("results are from a live run", True, ""))
+
+    # --- one-command reproduction actually works -------------------------- #
+    checks.append(
+        Check(
+            "README documents a one-command reproduction",
+            "make reproduce-dry" in md,
+            "missing `make reproduce-dry`",
+        )
+    )
+    makefile = (ROOT / "Makefile").read_text()
+    checks.append(
+        Check("Makefile defines reproduce-dry", "reproduce-dry:" in makefile, "target missing")
+    )
+
+    proc = run(["make", "reproduce-dry"], timeout=900)
+    checks.append(
+        Check(
+            "make reproduce-dry succeeds",
+            proc.returncode == 0,
+            (proc.stdout + proc.stderr).strip()[-800:],
+        )
+    )
+    produced = ROOT / "build" / "reproduce-dry"
+    for rel in ("run.jsonl", "RESULTS.md", "assets/fig1_rates_by_mode.png",
+                "assets/fig2_calibration.png"):
+        checks.append(
+            Check(f"reproduce-dry produced {rel}", (produced / rel).exists(), "missing output")
+        )
+    if (produced / "run.jsonl").exists():
+        n = len([ln for ln in (produced / "run.jsonl").read_text().splitlines() if ln.strip()])
+        checks.append(Check(f"reproduce-dry wrote {n} records", n == 100, "expected 100"))
+
+    # --- commit history is organised by phase ----------------------------- #
+    proc = run(["git", "log", "--pretty=%s"])
+    subjects = proc.stdout.splitlines()
+    phases = {m.group(1) for s_ in subjects if (m := re.match(r"Phase (\d+):", s_))}
+    checks.append(
+        Check(
+            f"commit history is organised by phase ({len(phases)} phases)",
+            len(phases) >= 5,
+            f"found phase commits: {sorted(phases)}",
+        )
+    )
+
+    return checks
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 

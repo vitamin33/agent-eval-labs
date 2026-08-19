@@ -37,6 +37,7 @@ INK = "#0b0b0b"
 INK_MUTED = "#52514e"
 SURFACE = "#fcfcfb"
 GRID = "#e3e2de"
+WARN = "#e34948"
 
 MODE_LABEL = {"baseline": "baseline", "self_verify": "self-verify"}
 
@@ -53,6 +54,25 @@ def _style(ax) -> None:
     ax.grid(axis="y", color=GRID, linewidth=0.8, zorder=0)
     ax.set_axisbelow(True)
 
+
+def _synthetic_banner(ax, summary: dict) -> None:
+    """Stamp mocked output so a chart cannot be screenshotted out of context."""
+    if summary.get("providers") == ["anthropic"]:
+        return
+    ax.text(
+        0.5,
+        0.5,
+        "SYNTHETIC\nmocked dry run",
+        transform=ax.transAxes,
+        fontsize=26,
+        color=WARN,
+        alpha=0.16,
+        ha="center",
+        va="center",
+        rotation=24,
+        zorder=6,
+        fontweight="bold",
+    )
 
 def _asym_err(rate: dict) -> tuple[float, float]:
     """Wilson interval as (lower_len, upper_len) for matplotlib yerr."""
@@ -156,6 +176,7 @@ def chart_rates(summary: dict, out: Path) -> Path:
         fontsize=8.5,
         color=INK_MUTED,
     )
+    _synthetic_banner(ax, summary)
     leg = ax.legend(frameon=False, fontsize=9, loc="upper right", ncols=2)
     for text in leg.get_texts():
         text.set_color(INK)
@@ -236,6 +257,7 @@ def chart_calibration(summary: dict, out: Path) -> Path:
         va="bottom",
     )
 
+    _synthetic_banner(ax, summary)
     fig.tight_layout()
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, facecolor=SURFACE, metadata={"Software": "agent-eval-labs"})
