@@ -194,6 +194,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"refusing to append to existing results file: {out_path}", file=sys.stderr)
         return 2
 
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     print(f"model={cfg.model} temperature={cfg.temperature} k={cfg.runs_per_cell} "
           f"provider={'mock' if args.dry_run else 'anthropic'}")
     print(f"writing {out_path}")
