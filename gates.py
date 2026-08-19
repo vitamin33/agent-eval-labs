@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -291,6 +292,150 @@ def gate_g1() -> list[Check]:
         Check("no LLM-judge ground truth in design", not banned, f"found: {banned}")
     )
 
+    return checks
+
+
+# --------------------------------------------------------------------------- #
+# G2 — PLAN.md: every task has a runnable verification command
+# --------------------------------------------------------------------------- #
+
+PLAN_MD = EXP / "PLAN.md"
+
+# Commands the gate is willing to execute itself. Anything else is checked for
+# shape only.
+ALLOWED_RUNNERS = {".venv/bin/python", "python", "python3", "make", "pytest"}
+
+# Never executed by the gate: these cost money or mutate published results.
+NEVER_EXECUTE = ("--live", "run-live", "reproduce-live")
+
+
+def parse_plan_tasks(md: str) -> dict[str, dict]:
+    """Extract {task_id: {deliverable, acceptance, command}} from PLAN.md."""
+    body = section_body(md, "Tasks")
+    out: dict[str, dict] = {}
+    for title, sec in split_sections(body, 3).items():
+        tid = title.split()[0]
+        if not re.match(r"^P\d+\.\d+$", tid):
+            continue
+        cmd = re.search(r"\*\*Verify:\*\*\s*\n+```bash\n(.*?)```", sec, re.DOTALL)
+        out[tid] = {
+            "title": title,
+            "deliverable": bool(re.search(r"\*\*Deliverable:\*\*", sec)),
+            "acceptance": bool(re.search(r"\*\*Acceptance:\*\*", sec)),
+            "command": cmd.group(1).strip() if cmd else None,
+            "paths": re.findall(r"`([^`]+\.(?:py|yaml|md|json))`", sec),
+        }
+    return out
+
+
+def command_targets(cmd: str) -> list[str]:
+    """Repo-relative file arguments a command references."""
+    try:
+        parts = shlex.split(cmd)
+    except ValueError:
+        return []
+    return [p for p in parts[1:] if "/" in p and not p.startswith("-") and not p.startswith("/")]
+
+
+@gate("G2", "PLAN.md: every task has a runnable verification command")
+def gate_g2() -> list[Check]:
+    checks: list[Check] = []
+    checks.append(exists("experiments/verifier-gap/PLAN.md", "file"))
+    if not PLAN_MD.exists():
+        return checks
+    md = PLAN_MD.read_text()
+
+    # --- experiment matrix arithmetic ------------------------------------- #
+    matrix = section_body(md, "Experiment matrix")
+    nums = [int(n) for n in re.findall(r"\|\s*\*{0,2}(\d+)\*{0,2}\s*\|", matrix)]
+    checks.append(
+        Check(
+            "matrix declares tasks/modes/runs/records",
+            len(nums) >= 4,
+            f"parsed numbers: {nums}",
+        )
+    )
+    if len(nums) >= 4:
+        tasks_n, modes_n, runs_n, records_n = nums[0], nums[1], nums[2], nums[3]
+        checks.append(
+            Check(
+                f"matrix arithmetic {tasks_n}x{modes_n}x{runs_n}={records_n}",
+                tasks_n * modes_n * runs_n == records_n,
+                f"{tasks_n}*{modes_n}*{runs_n} = {tasks_n * modes_n * runs_n}, declared {records_n}",
+            )
+        )
+        checks.append(
+            Check(
+                "matrix task count matches RESEARCH.md",
+                tasks_n == N_TASKS,
+                f"plan says {tasks_n}, research defines {N_TASKS}",
+            )
+        )
+
+    # --- per-task structure ----------------------------------------------- #
+    tasks = parse_plan_tasks(md)
+    checks.append(Check(f"plan tasks found: {len(tasks)}", len(tasks) >= 5, "expected >= 5"))
+
+    executed = 0
+    for tid, t in sorted(tasks.items()):
+        checks.append(Check(f"{tid}: has deliverable", t["deliverable"], "missing '- **Deliverable:**'"))
+        checks.append(Check(f"{tid}: has acceptance criteria", t["acceptance"], "missing '- **Acceptance:**'"))
+
+        cmd = t["command"]
+        if not cmd:
+            checks.append(Check(f"{tid}: has verification command", False, "missing ```bash block after '- **Verify:**'"))
+            continue
+
+        # one command, parseable, and driven by a known runner
+        single = "\n" not in cmd.strip()
+        try:
+            parts = shlex.split(cmd)
+            parseable = bool(parts)
+        except ValueError as exc:
+            parts, parseable = [], False
+            checks.append(Check(f"{tid}: command parses", False, str(exc)))
+        checks.append(Check(f"{tid}: exactly one command", single, f"got: {cmd!r}"))
+        checks.append(
+            Check(
+                f"{tid}: known runner ({parts[0] if parts else '?'})",
+                parseable and parts[0] in ALLOWED_RUNNERS,
+                f"first token must be one of {sorted(ALLOWED_RUNNERS)}",
+            )
+        )
+
+        # execute it when it is offline and its targets already exist
+        targets = command_targets(cmd)
+        unsafe = any(tok in cmd for tok in NEVER_EXECUTE)
+        missing = [t_ for t_ in targets if not (ROOT / t_).exists()]
+        # A `gates.py --gate GN` command is pending until GN is registered:
+        # the file exists from Phase 0, but the gate itself lands with its phase.
+        gate_ref = re.search(r"--gate\s+(G\d+)", cmd)
+        if gate_ref and gate_ref.group(1) not in REGISTRY:
+            missing.append(f"gate {gate_ref.group(1)} not yet registered")
+        if unsafe:
+            checks.append(Check(f"{tid}: not auto-executed (live command)", True, ""))
+        elif missing:
+            checks.append(
+                Check(f"{tid}: command runnable once implemented", True, f"pending: {missing}")
+            )
+        else:
+            proc = run(parts, timeout=600)
+            executed += 1
+            checks.append(
+                Check(
+                    f"{tid}: verification command passes",
+                    proc.returncode == 0,
+                    (proc.stdout + proc.stderr).strip()[-600:],
+                )
+            )
+
+    checks.append(
+        Check(
+            f"executed {executed} of {len(tasks)} verification commands",
+            True,
+            "",
+        )
+    )
     return checks
 
 
