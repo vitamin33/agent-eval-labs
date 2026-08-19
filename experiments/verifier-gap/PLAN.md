@@ -96,9 +96,10 @@ Call budget: baseline is 1 API call per record (50 calls); self_verify is 2
 - **Acceptance:** a full 100-record matrix runs offline from seeded mock
   responses, producing schema-valid JSON with token counts; the same seed
   produces byte-identical records across two invocations.
-- **Verify:**
+- **Verify:** (idempotent — the target clears its output dir first, so this is
+  safe to re-run; a fixed scratch path would collide with the append-only guard)
 ```bash
-.venv/bin/python experiments/verifier-gap/runner.py --dry-run --out /tmp/aelabs-dry.jsonl
+make reproduce-dry
 ```
 
 ### P3.7 — metrics with Wilson intervals

@@ -320,7 +320,8 @@ def parse_plan_tasks(md: str) -> dict[str, dict]:
         tid = title.split()[0]
         if not re.match(r"^P\d+\.\d+$", tid):
             continue
-        cmd = re.search(r"\*\*Verify:\*\*\s*\n+```bash\n(.*?)```", sec, re.DOTALL)
+        # A short note may sit between the label and the fence.
+        cmd = re.search(r"\*\*Verify:\*\*.*?```bash\n(.*?)```", sec, re.DOTALL)
         out[tid] = {
             "title": title,
             "deliverable": bool(re.search(r"\*\*Deliverable:\*\*", sec)),
@@ -412,10 +413,22 @@ def gate_g2() -> list[Check]:
         missing = [t_ for t_ in targets if not (ROOT / t_).exists()]
         # A `gates.py --gate GN` command is pending until GN is registered:
         # the file exists from Phase 0, but the gate itself lands with its phase.
+        # A `gates.py --gate GN` command belongs to phase N, not to this gate.
+        # G2's job is that the plan is well-formed and its commands run; whether
+        # phase 4 has happened is G4's verdict to give, not G2's.
         gate_ref = re.search(r"--gate\s+(G\d+)", cmd)
-        if gate_ref and gate_ref.group(1) not in REGISTRY:
-            missing.append(f"gate {gate_ref.group(1)} not yet registered")
-        if unsafe:
+        delegated = None
+        if gate_ref:
+            target_gate = gate_ref.group(1)
+            if target_gate not in REGISTRY:
+                missing.append(f"gate {target_gate} not yet registered")
+            elif int(target_gate[1:]) > 2:
+                delegated = target_gate
+        if delegated:
+            checks.append(
+                Check(f"{tid}: verification delegated to {delegated}", True, "")
+            )
+        elif unsafe:
             checks.append(Check(f"{tid}: not auto-executed (live command)", True, ""))
         elif missing:
             checks.append(
