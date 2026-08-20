@@ -595,16 +595,23 @@ def gate_g3() -> list[Check]:
         tmp.unlink()
 
     # --- an injected false green is counted, checked here too ------------- #
+    # The record must carry a verification prompt: that is how metrics decides a
+    # record was verified, and the fixture has to match what the runner writes.
     proc = _run_py(
         "import metrics;"
-        "rec={'mode':'self_verify','truth_initial':'wrong','verdict':'correct','confidence':99};"
+        "rec={'mode':'self_verify','truth_initial':'wrong','verdict':'correct',"
+        "'confidence':99,'prompts':{'verification':'v'}};"
         "r=metrics.false_green_rate([rec]);"
         "assert r.numerator==1 and r.value==1.0, r;"
+        "inj={'mode':'inject_wrong','truth_initial':'wrong','verdict':'correct',"
+        "'confidence':99,'prompts':{'verification':'v'}};"
+        "r2=metrics.false_green_rate([inj]);"
+        "assert r2.numerator==1, r2;"
         "print('counted')"
     )
     checks.append(
         Check(
-            "gate-level false-green injection is counted",
+            "gate-level false-green injection is counted in both arms",
             proc.returncode == 0 and "counted" in proc.stdout,
             (proc.stdout + proc.stderr)[-400:],
         )
