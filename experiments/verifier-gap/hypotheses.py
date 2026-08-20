@@ -109,9 +109,11 @@ def evaluate(summary: dict) -> list[Result]:
         out.append(Result("H3", "ECE > 0.15", SUPPORTED if holds else FALSIFIED,
                           f"{ece:.4f}", f"> {T['H3_ece_min']}", b))
 
-    # H4 — per-run accuracy overstates reliability.
-    base = summary["by_mode"]["baseline"]
-    p1, pk = base["pass_at_1"]["value"], base["pass_hat_k"]["value"]
+    # H4 — per-run accuracy overstates reliability. Needs the generation arm;
+    # a summary without one leaves it undetermined rather than crashing.
+    base = summary.get("by_mode", {}).get("baseline")
+    p1 = base["pass_at_1"]["value"] if base else None
+    pk = base["pass_hat_k"]["value"] if base else None
     if p1 is None or pk is None:
         out.append(Result("H4", "baseline pass@1 − pass^k >= 20pp", UNDETERMINED,
                           "missing pass rates", f">= {T['H4_reliability_gap_min_pp']:.0f}pp"))

@@ -21,20 +21,37 @@ if str(HERE) not in sys.path:
 
 import hypotheses  # noqa: E402
 import metrics  # noqa: E402
+import report  # noqa: E402
 
 
 def hardest_tasks(records: list[dict], n: int = 2) -> list[str]:
     """The n tasks with the lowest baseline pass@1; ties broken by task id."""
-    per = metrics.pass_at_1_by_task([r for r in records if r["mode"] == "baseline"])
+    baseline = [r for r in records if r["mode"] == "baseline"]
+    per = metrics.pass_at_1_by_task(baseline or records)
     ranked = sorted(per.items(), key=lambda kv: (kv[1].value if kv[1].value is not None else 1.0, kv[0]))
     return [tid for tid, _ in ranked[:n]]
 
 
-def analyse(records: list[dict], k: int, n_drop: int = 2) -> dict:
-    full = metrics.summarize(records, k=k)
-    dropped = hardest_tasks(records, n_drop)
+def analyse(records: list[dict], k: int, n_drop: int = 2,
+            inject_records: list[dict] | None = None) -> dict:
+    """Re-evaluate every hypothesis with the n hardest tasks removed.
+
+    Both arms are dropped together: a task is removed from the generation AND
+    the injection data, so the combined verdicts are recomputed on a genuinely
+    smaller task set rather than a mismatched pair of them.
+    """
+    inject_records = inject_records or []
+
+    def summarise(gen, inj):
+        g = metrics.summarize(gen, k=k) if gen else None
+        i = metrics.summarize(inj, k=k) if inj else None
+        return report.combined_summary(g, i)
+
+    full = summarise(records, inject_records)
+    dropped = hardest_tasks(records or inject_records, n_drop)
     kept = [r for r in records if r["task_id"] not in dropped]
-    reduced = metrics.summarize(kept, k=k)
+    kept_inj = [r for r in inject_records if r["task_id"] not in dropped]
+    reduced = summarise(kept, kept_inj)
 
     before = {r.id: r for r in hypotheses.evaluate(full)}
     after = {r.id: r for r in hypotheses.evaluate(reduced)}
@@ -46,8 +63,8 @@ def analyse(records: list[dict], k: int, n_drop: int = 2) -> dict:
     ]
     return {
         "dropped_tasks": dropped,
-        "n_records_full": len(records),
-        "n_records_reduced": len(kept),
+        "n_records_full": len(records) + len(inject_records),
+        "n_records_reduced": len(kept) + len(kept_inj),
         "full": before,
         "reduced": after,
         "flips": flips,
@@ -84,13 +101,15 @@ def to_markdown(analysis: dict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--results", required=True)
+    ap.add_argument("--results", required=True, help="generation-arm results")
+    ap.add_argument("--inject-results", default=None, help="injection-arm results")
     ap.add_argument("--drop", type=int, default=2)
     args = ap.parse_args(argv)
 
     records = metrics.load_records(args.results)
+    inject = metrics.load_records(args.inject_results) if args.inject_results else []
     k = max(r["run_index"] for r in records) + 1
-    print(to_markdown(analyse(records, k=k, n_drop=args.drop)))
+    print(to_markdown(analyse(records, k=k, n_drop=args.drop, inject_records=inject)))
     return 0
 
 

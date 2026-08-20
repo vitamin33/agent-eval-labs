@@ -100,6 +100,18 @@ def _correct(r: dict) -> bool:
     return r["truth_final"] == "correct"
 
 
+def _verifying(records: list[dict]) -> list[dict]:
+    """Records where a verification call actually happened.
+
+    Selected by the presence of a verification prompt rather than by mode name,
+    so the generation arm (`self_verify`) and the injection arm
+    (`inject_wrong` / `inject_correct`) flow through identical formulas. The
+    verifier was asked the same question in both; only the provenance of the
+    answer it judged differs.
+    """
+    return [r for r in records if (r.get("prompts") or {}).get("verification")]
+
+
 # --------------------------------------------------------------------------- #
 # core metrics
 # --------------------------------------------------------------------------- #
@@ -136,20 +148,20 @@ def false_green_rate(records: list[dict]) -> Rate:
     Conditioned on `truth_initial`: the verdict is a judgement about the
     generated answer, not about any later revision.
     """
-    shown_wrong = [r for r in _mode(records, "self_verify") if r["truth_initial"] != "correct"]
+    shown_wrong = [r for r in _verifying(records) if r["truth_initial"] != "correct"]
     approved = [r for r in shown_wrong if r["verdict"] == "correct"]
     return Rate(len(approved), len(shown_wrong))
 
 
 def false_red_rate(records: list[dict]) -> Rate:
     """P(verdict = wrong | the answer shown to the verifier was correct)."""
-    shown_correct = [r for r in _mode(records, "self_verify") if r["truth_initial"] == "correct"]
+    shown_correct = [r for r in _verifying(records) if r["truth_initial"] == "correct"]
     rejected = [r for r in shown_correct if r["verdict"] == "wrong"]
     return Rate(len(rejected), len(shown_correct))
 
 
 def verifier_accuracy(records: list[dict]) -> Rate:
-    judged = [r for r in _mode(records, "self_verify") if r["verdict"] is not None]
+    judged = [r for r in _verifying(records) if r["verdict"] is not None]
     agree = [r for r in judged if r["verdict"] == r["truth_initial"]]
     return Rate(len(agree), len(judged))
 
@@ -182,7 +194,7 @@ def truncation_rate(records: list[dict]) -> Rate:
 
 
 def verdict_parse_failure_rate(records: list[dict]) -> Rate:
-    sv = _mode(records, "self_verify")
+    sv = _verifying(records)
     return Rate(sum(1 for r in sv if r["verdict"] is None), len(sv))
 
 
@@ -212,7 +224,7 @@ def expected_calibration_error(records: list[dict], n_bins: int = 10) -> tuple[f
     """
     judged = [
         r
-        for r in _mode(records, "self_verify")
+        for r in _verifying(records)
         if r["verdict"] is not None and r["confidence"] is not None
     ]
     if not judged:
@@ -244,7 +256,7 @@ def expected_calibration_error(records: list[dict], n_bins: int = 10) -> tuple[f
 def mean_confidence_on_false_greens(records: list[dict]) -> tuple[float | None, int]:
     fg = [
         r
-        for r in _mode(records, "self_verify")
+        for r in _verifying(records)
         if r["truth_initial"] != "correct"
         and r["verdict"] == "correct"
         and r["confidence"] is not None
@@ -261,6 +273,7 @@ def mean_confidence_on_false_greens(records: list[dict]) -> tuple[float | None, 
 
 def summarize(records: list[dict], k: int = 5) -> dict:
     """Every metric in RESEARCH.md, plus the per-task breakdown."""
+    modes_present = sorted({r["mode"] for r in records})
     base = _mode(records, "baseline")
     sv = _mode(records, "self_verify")
 
@@ -278,6 +291,8 @@ def summarize(records: list[dict], k: int = 5) -> dict:
 
     out = {
         "n_records": len(records),
+        "modes_present": modes_present,
+        "arm": "injection" if any(r.get("injected") for r in records) else "generation",
         "providers": sorted({r["provider"] for r in records}),
         "models_resolved": sorted({r["model_resolved"] for r in records}),
         "k": k,
@@ -297,7 +312,8 @@ def summarize(records: list[dict], k: int = 5) -> dict:
         "per_task": {},
     }
 
-    for name, subset in (("baseline", base), ("self_verify", sv)):
+    for name in modes_present:
+        subset = _mode(records, name)
         in_tok, out_tok = total_tokens(subset)
         out["by_mode"][name] = {
             "n": len(subset),
@@ -318,7 +334,8 @@ def summarize(records: list[dict], k: int = 5) -> dict:
     for tid in sorted({r["task_id"] for r in records}):
         t_base = [r for r in base if r["task_id"] == tid]
         t_sv = [r for r in sv if r["task_id"] == tid]
-        fg_denom = [r for r in t_sv if r["truth_initial"] != "correct"]
+        t_verify = [r for r in _verifying(records) if r["task_id"] == tid]
+        fg_denom = [r for r in t_verify if r["truth_initial"] != "correct"]
         fg_num = [r for r in fg_denom if r["verdict"] == "correct"]
         out["per_task"][tid] = {
             "task_name": next((r["task_name"] for r in records if r["task_id"] == tid), tid),

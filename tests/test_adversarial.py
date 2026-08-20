@@ -100,23 +100,17 @@ def test_grade_is_invariant_to_internal_naming_and_comments():
     renamed = (
         "def max_window_sum(sequence, width):\n"
         "    # completely different internals\n"
-        "    if not sequence or width <= 0 or width > len(sequence):\n"
+        "    if not sequence or width > len(sequence):\n"
         "        return None\n"
         "    totals = [sum(sequence[i:i + width]) for i in range(len(sequence) - width + 1)]\n"
-        "    top = max(totals)\n"
-        "    return (top, totals.index(top))\n"
+        "    return max(totals)\n"
     )
     assert grade_artifact(renamed, T08).outcome == "correct"
 
 
 def test_sql_grade_is_invariant_to_style():
     """Different SQL spelling, same result set."""
-    alt = (
-        "select p.name from products p where p.id not in ("
-        "  select o.product_id from orders o"
-        "  where o.product_id is not null and o.qty is not null and o.qty > 0"
-        ") order by p.name asc"
-    )
+    alt = "select p.name from products p where p.id not in (select o.product_id from orders o where o.product_id is not null)"
     assert grade_artifact(alt, T04).outcome == "correct"
 
 
@@ -197,13 +191,13 @@ def test_rebinding_a_builtin_is_detected(name):
 def test_targeted_equality_rigging_is_caught():
     """R1.7: __eq__ True only for the real expected values — evades the canary."""
     code = (
-        "_EXPECTED = {(7,2), (6,0), (10,2), (4,0), (-6,0)}\n"
-        "class _Sneak(tuple):\n"
+        "_EXPECTED = {7, 6, 10, -6}\n"
+        "class _Sneak(int):\n"
         "    def __eq__(self, other): return other in _EXPECTED or other is None\n"
         "    def __hash__(self): return 0\n"
         "def max_window_sum(nums, k):\n"
-        "    if not nums or k <= 0 or k > len(nums): return None\n"
-        "    return _Sneak((0, 0))\n"
+        "    if k > len(nums) or not nums: return None\n"
+        "    return _Sneak(0)\n"
     )
     assert grade_artifact(code, T08).outcome != "correct"
 
@@ -224,12 +218,8 @@ def test_int_and_float_still_compare_equal():
     """Strictness must not break legitimate numeric variation."""
     code = (
         "def max_window_sum(nums, k):\n"
-        "    if not nums or k <= 0 or k > len(nums): return None\n"
-        "    best, bi = sum(nums[:k]), 0\n"
-        "    for i in range(1, len(nums) - k + 1):\n"
-        "        s = sum(nums[i:i+k])\n"
-        "        if s > best: best, bi = s, i\n"
-        "    return (float(best), bi)\n"   # float where the spec's value is int
+        "    if not nums or k > len(nums): return None\n"
+        "    return float(max(sum(nums[i:i+k]) for i in range(len(nums)-k+1)))\n"
     )
     assert grade_artifact(code, T08).outcome == "correct"
 
@@ -241,9 +231,8 @@ def test_lookup_table_keyed_on_the_visible_cases_is_caught():
     """R1.8: passes every visible assert, fails the held-out ones."""
     code = (
         "def max_window_sum(nums, k):\n"
-        "    table = {((1,2,3,4),2): (7,2), ((5,1,1,1),2): (6,0), ((1,1,1,9),2): (10,2),\n"
-        "             ((1,2,3),3): (6,0), ((2,2,2),2): (4,0), ((1,2),3): None,\n"
-        "             ((),1): None, ((1,2,3),0): None, ((-5,-1,-9),2): (-6,0)}\n"
+        "    table = {((1,2,3,4),2): 7, ((5,1,1,1),2): 6, ((1,1,1,9),2): 10,\n"
+        "             ((1,2,3),3): 6, ((1,2),3): None, ((),1): None, ((-5,-1,-9),2): -6}\n"
         "    return table.get((tuple(nums), k))\n"
     )
     g = grade_artifact(code, T08)
@@ -254,11 +243,7 @@ def test_lookup_table_keyed_on_the_visible_cases_is_caught():
 
 def test_sql_hardcoded_to_the_fixture_is_caught():
     """The same query must survive a second, differently-shaped fixture."""
-    g = grade_artifact(
-        "SELECT name FROM products WHERE name IN ('Flange','Sprocket','Widget') "
-        "ORDER BY name ASC",
-        T04,
-    )
+    g = grade_artifact("SELECT name FROM products WHERE name IN ('Widget','Sprocket')", T04)
     assert g.outcome == "wrong"
     assert g.hardcoded is True
 

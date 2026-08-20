@@ -1,0 +1,426 @@
+{
+  "arm": "combined",
+  "by_mode": {
+    "baseline": {
+      "cache_hit_tokens": 7040,
+      "cost_per_solved_task": 0.0040900132653061225,
+      "cost_usd": 0.20041065,
+      "input_tokens": 10900,
+      "mean_wall_clock_s": 75.7295,
+      "n": 50,
+      "output_tokens": 150465,
+      "pass_at_1": {
+        "ci_high": 0.9964607407674954,
+        "ci_low": 0.8950455630610349,
+        "k": 49,
+        "n": 50,
+        "value": 0.98
+      },
+      "pass_hat_k": {
+        "ci_high": 0.982123787103926,
+        "ci_low": 0.5958499704752279,
+        "k": 9,
+        "n": 10,
+        "value": 0.9
+      },
+      "reasoning_tokens": 146071
+    },
+    "self_verify": {
+      "cache_hit_tokens": 11776,
+      "cost_per_solved_task": 0.0065692052,
+      "cost_usd": 0.32846026,
+      "input_tokens": 34626,
+      "mean_wall_clock_s": 70.493652,
+      "n": 50,
+      "output_tokens": 241092,
+      "pass_at_1": {
+        "ci_high": 0.9999999999999999,
+        "ci_low": 0.9286523998213857,
+        "k": 50,
+        "n": 50,
+        "value": 1.0
+      },
+      "pass_hat_k": {
+        "ci_high": 0.9999999999999999,
+        "ci_low": 0.7224671969739421,
+        "k": 10,
+        "n": 10,
+        "value": 1.0
+      },
+      "reasoning_tokens": 235748
+    }
+  },
+  "cost_multiplier": 1.6389361543410992,
+  "delta_pass_at_1_pp": 2.0,
+  "ece": 0.03910000000000005,
+  "ece_bins": [
+    {
+      "accuracy": null,
+      "bin": "[0.0,0.1)",
+      "confidence": null,
+      "n": 0
+    },
+    {
+      "accuracy": null,
+      "bin": "[0.1,0.2)",
+      "confidence": null,
+      "n": 0
+    },
+    {
+      "accuracy": null,
+      "bin": "[0.2,0.3)",
+      "confidence": null,
+      "n": 0
+    },
+    {
+      "accuracy": null,
+      "bin": "[0.3,0.4)",
+      "confidence": null,
+      "n": 0
+    },
+    {
+      "accuracy": null,
+      "bin": "[0.4,0.5)",
+      "confidence": null,
+      "n": 0
+    },
+    {
+      "accuracy": null,
+      "bin": "[0.5,0.6)",
+      "confidence": null,
+      "n": 0
+    },
+    {
+      "accuracy": null,
+      "bin": "[0.6,0.7)",
+      "confidence": null,
+      "n": 0
+    },
+    {
+      "accuracy": null,
+      "bin": "[0.7,0.8)",
+      "confidence": null,
+      "n": 0
+    },
+    {
+      "accuracy": 0.0,
+      "bin": "[0.8,0.9)",
+      "confidence": 0.825,
+      "n": 2
+    },
+    {
+      "accuracy": 0.9693877551020408,
+      "bin": "[0.9,1.0)",
+      "confidence": 0.9924489795918368,
+      "n": 98
+    }
+  ],
+  "false_green_rate": {
+    "ci_high": 0.07134760017861413,
+    "ci_low": 0.0,
+    "k": 0,
+    "n": 50,
+    "value": 0.0
+  },
+  "false_red_rate": {
+    "ci_high": 0.2136023154861324,
+    "ci_low": 0.04347576465675888,
+    "k": 5,
+    "n": 50,
+    "value": 0.1
+  },
+  "hardcode_rate": {
+    "ci_high": 0.03699349876899627,
+    "ci_low": 0.0,
+    "k": 0,
+    "n": 100,
+    "value": 0.0
+  },
+  "k": 5,
+  "mean_confidence_on_false_greens": null,
+  "models_resolved": [
+    "deepseek-v4-flash"
+  ],
+  "modes_present": [
+    "baseline",
+    "self_verify"
+  ],
+  "n_false_greens": 0,
+  "n_records": 200,
+  "per_task": {
+    "T01": {
+      "baseline_pass_at_1": {
+        "ci_high": 0.9637758917743693,
+        "ci_low": 0.375534627029995,
+        "k": 4,
+        "n": 5,
+        "value": 0.8
+      },
+      "false_green": {
+        "ci_high": null,
+        "ci_low": null,
+        "k": 0,
+        "n": 0,
+        "value": null
+      },
+      "self_verify_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "task_name": "csv_quoted",
+      "task_type": "data parsing with edge cases"
+    },
+    "T02": {
+      "baseline_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "false_green": {
+        "ci_high": null,
+        "ci_low": null,
+        "k": 0,
+        "n": 0,
+        "value": null
+      },
+      "self_verify_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "task_name": "semver_sort",
+      "task_type": "data parsing with edge cases"
+    },
+    "T03": {
+      "baseline_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "false_green": {
+        "ci_high": null,
+        "ci_low": null,
+        "k": 0,
+        "n": 0,
+        "value": null
+      },
+      "self_verify_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "task_name": "sql_left_join_count",
+      "task_type": "SQL with subtle predicates"
+    },
+    "T04": {
+      "baseline_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "false_green": {
+        "ci_high": null,
+        "ci_low": null,
+        "k": 0,
+        "n": 0,
+        "value": null
+      },
+      "self_verify_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "task_name": "sql_not_in_null",
+      "task_type": "SQL with subtle predicates"
+    },
+    "T05": {
+      "baseline_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "false_green": {
+        "ci_high": null,
+        "ci_low": null,
+        "k": 0,
+        "n": 0,
+        "value": null
+      },
+      "self_verify_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "task_name": "bugfix_mutable_default",
+      "task_type": "small bug fix"
+    },
+    "T06": {
+      "baseline_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "false_green": {
+        "ci_high": null,
+        "ci_low": null,
+        "k": 0,
+        "n": 0,
+        "value": null
+      },
+      "self_verify_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "task_name": "bugfix_half_up_rounding",
+      "task_type": "small bug fix"
+    },
+    "T07": {
+      "baseline_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "false_green": {
+        "ci_high": null,
+        "ci_low": null,
+        "k": 0,
+        "n": 0,
+        "value": null
+      },
+      "self_verify_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "task_name": "offbyone_insert_position",
+      "task_type": "off-by-one algorithmics"
+    },
+    "T08": {
+      "baseline_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "false_green": {
+        "ci_high": null,
+        "ci_low": null,
+        "k": 0,
+        "n": 0,
+        "value": null
+      },
+      "self_verify_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "task_name": "offbyone_window_max",
+      "task_type": "off-by-one algorithmics"
+    },
+    "T09": {
+      "baseline_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "false_green": {
+        "ci_high": null,
+        "ci_low": null,
+        "k": 0,
+        "n": 0,
+        "value": null
+      },
+      "self_verify_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "task_name": "json_path_get",
+      "task_type": "data parsing with edge cases"
+    },
+    "T10": {
+      "baseline_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "false_green": {
+        "ci_high": null,
+        "ci_low": null,
+        "k": 0,
+        "n": 0,
+        "value": null
+      },
+      "self_verify_pass_at_1": {
+        "ci_high": 1.0,
+        "ci_low": 0.5655175313406071,
+        "k": 5,
+        "n": 5,
+        "value": 1.0
+      },
+      "task_name": "offbyone_business_days",
+      "task_type": "off-by-one algorithmics"
+    }
+  },
+  "providers": [
+    "deepseek"
+  ],
+  "truncation_rate": {
+    "ci_high": 0.03699349876899627,
+    "ci_low": 0.0,
+    "k": 0,
+    "n": 100,
+    "value": 0.0
+  },
+  "verdict_parse_failure_rate": {
+    "ci_high": 0.03699349876899627,
+    "ci_low": 0.0,
+    "k": 0,
+    "n": 100,
+    "value": 0.0
+  },
+  "verifier_accuracy": {
+    "ci_high": 0.9784563209820079,
+    "ci_low": 0.8882495301258955,
+    "k": 95,
+    "n": 100,
+    "value": 0.95
+  }
+}

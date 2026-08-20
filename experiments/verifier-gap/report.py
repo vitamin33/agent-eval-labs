@@ -26,6 +26,7 @@ ROOT = HERE.parent.parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+import hypotheses  # noqa: E402
 import metrics  # noqa: E402
 
 ASSETS = ROOT / "docs" / "assets"
@@ -105,8 +106,13 @@ def _asym_err(rate: dict) -> tuple[float, float]:
 def chart_rates(summary: dict, out: Path) -> Path:
     k = summary["k"]
     groups = ["pass@1", f"pass^{k}", "false-green"]
-    base = summary["by_mode"]["baseline"]
-    sv = summary["by_mode"]["self_verify"]
+    empty = {
+        "pass_at_1": {"value": None}, "pass_hat_k": {"value": None},
+        "cost_usd": 0.0, "cost_per_solved_task": None,
+        "input_tokens": 0, "output_tokens": 0,
+    }
+    base = summary["by_mode"].get("baseline", empty)
+    sv = summary["by_mode"].get("self_verify", empty)
 
     series = {
         "baseline": [base["pass_at_1"], base["pass_hat_k"], None],
@@ -168,6 +174,21 @@ def chart_rates(summary: dict, out: Path) -> Path:
         style="italic",
         zorder=5,
     )
+    # The false-green bar comes from the injection arm, not from self-verify:
+    # the generation arm produced no wrong answers to be wrong about.
+    fg = summary.get("false_green_rate") or {}
+    if summary.get("arm") == "combined" and fg.get("n"):
+        ax.text(
+            2 + 0.5 * (width + 0.02),
+            -9,
+            f"injection arm\nn={fg['n']} wrong answers",
+            ha="center",
+            va="top",
+            fontsize=7.5,
+            color=INK_MUTED,
+            style="italic",
+            zorder=5,
+        )
 
     ax.set_xticks(list(xs))
     ax.set_xticklabels(groups, fontsize=10, color=INK)
@@ -184,7 +205,9 @@ def chart_rates(summary: dict, out: Path) -> Path:
     ax.text(
         0,
         1.015,
-        f"error bars: Wilson 95% CI  ·  n={summary['n_records']} records  ·  k={k}",
+        f"error bars: Wilson 95% CI  ·  n={summary['n_records']} records  ·  k={k}"
+        + ("  ·  pass rates from the generation arm, false-green from the injection arm"
+           if summary.get("arm") == "combined" else ""),
         transform=ax.transAxes,
         fontsize=8.5,
         color=INK_MUTED,
@@ -194,9 +217,10 @@ def chart_rates(summary: dict, out: Path) -> Path:
     for text in leg.get_texts():
         text.set_color(INK)
 
-    fig.tight_layout()
+    fig.subplots_adjust(bottom=0.22)
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, facecolor=SURFACE, metadata={"Software": "agent-eval-labs"})
+    fig.savefig(out, facecolor=SURFACE, metadata={"Software": "agent-eval-labs"},
+                bbox_inches="tight")
     plt.close(fig)
     return out
 
@@ -293,7 +317,14 @@ def _r(d: dict, pct: bool = True) -> str:
 
 def results_markdown(summary: dict, source: str) -> str:
     k = summary["k"]
-    base, sv = summary["by_mode"]["baseline"], summary["by_mode"]["self_verify"]
+    empty = {
+        "pass_at_1": {"value": None}, "pass_hat_k": {"value": None},
+        "cost_usd": 0.0, "cost_per_solved_task": None,
+        "input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0,
+        "cache_hit_tokens": 0,
+    }
+    base = summary["by_mode"].get("baseline", empty)
+    sv = summary["by_mode"].get("self_verify", empty)
     synthetic = is_synthetic(summary)
 
     lines: list[str] = []
@@ -365,6 +396,66 @@ def results_markdown(summary: dict, source: str) -> str:
     return "\n".join(lines)
 
 
+def combined_summary(gen_summary: dict | None, inj_summary: dict | None) -> dict:
+    """Merge the two arms into the single summary the hypotheses are judged on.
+
+    H2 and H4 are properties of generation; H1, H3 and H5 need wrong answers and
+    therefore come from the injection arm. Merging here keeps `hypotheses.py`
+    unaware that there are two arms — it evaluates one summary, as it always did.
+    """
+    if gen_summary and not inj_summary:
+        return gen_summary
+    if inj_summary and not gen_summary:
+        return inj_summary
+    merged = dict(gen_summary)
+    for key in (
+        "false_green_rate", "false_red_rate", "verifier_accuracy",
+        "verdict_parse_failure_rate", "ece", "ece_bins",
+        "mean_confidence_on_false_greens", "n_false_greens",
+    ):
+        merged[key] = inj_summary[key]
+    merged["arm"] = "combined"
+    merged["n_records"] = gen_summary["n_records"] + inj_summary["n_records"]
+    return merged
+
+
+def injection_markdown(summary: dict, source: str) -> str:
+    """The injection arm's table: verification measured on a fixed denominator."""
+    by_mode = summary["by_mode"]
+    n_wrong = summary["false_green_rate"]["n"]
+    n_correct = summary["false_red_rate"]["n"]
+    lines = [
+        "The model is shown a solution it did not write and asked the identical "
+        "verification question. `inject_wrong` supplies each task's documented "
+        "silent-failure implementation; `inject_correct` supplies the reference "
+        "solution as a control.",
+        "",
+        f"{summary['n_records']} records · {n_wrong} wrong answers shown · "
+        f"{n_correct} correct answers shown · Wilson 95% intervals.",
+        "",
+        "| Metric | value |",
+        "|---|---|",
+        f"| **false-green rate** — approved a wrong answer | **{_r(summary['false_green_rate'])}** |",
+        f"| false-red rate — rejected a correct answer | {_r(summary['false_red_rate'])} |",
+        f"| verifier accuracy | {_r(summary['verifier_accuracy'])} |",
+        f"| expected calibration error | "
+        f"{'%.4f' % summary['ece'] if summary['ece'] is not None else 'n/a'} |",
+        f"| mean confidence on false greens | "
+        f"{'%.1f' % summary['mean_confidence_on_false_greens'] if summary['mean_confidence_on_false_greens'] is not None else 'n/a'}"
+        f" (n={summary['n_false_greens']}) |",
+        f"| verdict parse failure rate | {_r(summary['verdict_parse_failure_rate'])} |",
+        "",
+    ]
+    if by_mode:
+        lines += ["| Condition | records | cost (USD) |", "|---|---|---|"]
+        for name in sorted(by_mode):
+            m = by_mode[name]
+            lines.append(f"| `{name}` | {m['n']} | ${m['cost_usd']:.4f} |")
+        lines.append("")
+    lines.append(f"<sub>Generated by `report.py` from `{source}`.</sub>")
+    return "\n".join(lines)
+
+
 README_BEGIN = "<!-- BEGIN GENERATED RESULTS -->"
 README_END = "<!-- END GENERATED RESULTS -->"
 
@@ -383,7 +474,8 @@ def inject_readme(markdown: str, readme: Path) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--results", required=True, help="path to a results .jsonl")
+    ap.add_argument("--results", required=True, help="generation-arm results .jsonl")
+    ap.add_argument("--inject-results", default=None, help="injection-arm results .jsonl")
     ap.add_argument("--out-md", default=str(HERE / "RESULTS.md"))
     ap.add_argument("--assets", default=str(ASSETS))
     ap.add_argument("--readme", default=str(ROOT / "README.md"))
@@ -395,7 +487,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no records in {args.results}", file=sys.stderr)
         return 1
     k = max(r["run_index"] for r in records) + 1
-    summary = metrics.summarize(records, k=k)
+    gen_summary = metrics.summarize(records, k=k)
+
+    inj_summary = None
+    if args.inject_results:
+        inj_records = metrics.load_records(args.inject_results)
+        inj_summary = metrics.summarize(inj_records, k=k)
+
+    summary = combined_summary(gen_summary, inj_summary)
 
     assets = Path(args.assets)
     source = Path(args.results).name
@@ -403,6 +502,16 @@ def main(argv: list[str] | None = None) -> int:
     fig2 = chart_calibration(summary, assets / "fig2_calibration.png")
 
     md = results_markdown(summary, source)
+    if inj_summary is not None:
+        md += (
+            "\n\n## Arm 2 — injected verification\n\n"
+            + injection_markdown(inj_summary, Path(args.inject_results).name)
+        )
+    md += (
+        "\n\n## Hypotheses\n\nEvery threshold was fixed in RESEARCH.md before "
+        "any data was collected.\n\n"
+        + hypotheses.to_markdown(hypotheses.evaluate(summary))
+    )
     Path(args.out_md).write_text(md)
     summary_path = Path(args.results).with_suffix(".summary.json")
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))

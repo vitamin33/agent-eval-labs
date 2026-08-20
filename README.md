@@ -28,14 +28,47 @@ informative. If that holds, self-verification is fine as a retry heuristic and
 unsafe as an autonomous gate, and the difference matters for anything shipping
 agents into production.
 
+## Result: the thesis was falsified on this model
+
+Every hypothesis that could be decided was **falsified by its own
+pre-registered threshold**. `deepseek-v4-flash` did not exhibit a verifier gap
+on this task set.
+
+| | | |
+|---|---|---|
+| **H1** false-green rate ≥ 15% | 0.0% [0.0, 7.1] | **FALSIFIED** |
+| **H2** Δpass@1 < 10pp *and* cost ≥ 1.8× | Δ=+2.0pp, cost=1.64× | **FALSIFIED** |
+| **H3** ECE > 0.15 | 0.039 | **FALSIFIED** |
+| **H4** pass@1 − pass^5 ≥ 20pp | 8.0pp | **FALSIFIED** |
+| **H5** confidence on false greens ≥ 70 | 0 false greens exist | **UNDETERMINED** |
+
+Shown 50 solutions containing a documented silent-failure bug, the model
+approved **none of them**. Shown 50 correct solutions it wrongly rejected 5. It
+errs toward false alarms, not false approvals — the opposite of the predicted
+failure mode.
+
+Two findings sit underneath that:
+
+**Extended reasoning closes the generation gap on small problems.** Baseline
+pass@1 was 98%. The tasks each plant a silent-failure mode a fast implementation
+walks into — `line.split(",")`, lexicographic version sort, `NOT IN` against a
+NULL, `round()`'s banker's rounding. A model spending 11k–30k reasoning tokens
+before writing 300 characters finds essentially all of them. Making the tasks
+harder did not change this: a hardened variant scored 10/10 at three to thirty
+times the reasoning cost.
+
+**Reasoning tokens are 90–100% of output.** T01 spent 30,579 tokens of thought
+to emit 294 tokens of code. Cost here is a measure of deliberation, not of
+answer length.
+
+**What this does not establish.** The verifier judged code it did not write, so
+it had no stake in the answer. That is the *favourable* condition, which makes
+a falsified H1 a lower bound rather than a clean bill of health for
+self-verification. See the limitations section.
+
 ## Status
 
-> **The live run has not been executed.** Phases 0–3, 5 and 6 are complete and
-> gated; Phase 4 (the real 100-record matrix) is blocked on API credentials.
-> **Every number below comes from the mocked dry run and is synthetic** — it
-> exercises the pipeline and says nothing about model behaviour. The charts are
-> watermarked accordingly. Running `make run-live && make report` replaces this
-> section with real data and flips this banner.
+All seven gates pass. Two live runs, 200 records, $0.74 total.
 
 | Phase | Gate | Status |
 |---|---|---|
@@ -43,9 +76,15 @@ agents into production.
 | 1 RESEARCH.md | G1 | passing |
 | 2 PLAN.md | G2 | passing |
 | 3 Implementation | G3 | passing |
-| 4 Run & calibrate | G4 | see Status |
+| 4 Run & calibrate | G4 | passing |
 | 5 Adversarial review | G5 | passing |
 | 6 Ship | G6 | passing |
+
+The 50–70% calibration window was **not met** and was **not widened**: baseline
+pass@1 is 98%. The window's stated purpose is to guarantee enough wrong answers
+to compute a false-green rate over, and the injection arm supplies 50 by
+construction. G4 accepts either route and prints which one applied. See
+[CALIBRATION.md](experiments/verifier-gap/CALIBRATION.md).
 
 ## Method
 
@@ -57,11 +96,18 @@ agents into production.
   that is the natural first thing to write, passes the obvious case, and fails
   a specific edge case. Three data-parsing, two SQL, two bug fixes, three
   off-by-one.
-- **Modes** `baseline` (one generation call) and `self_verify` (the identical
-  generation call, then a second call carrying the verification block). The
-  generation prompts are **byte-identical**; a test reconstructs one from the
-  other and asserts the only difference is that block.
-- **Matrix** 10 tasks × 2 modes × 5 seeded runs = **100 records**, 150 API calls.
+- **Arm 1 — generation.** `baseline` (one generation call) and `self_verify`
+  (the identical generation call, then a second carrying the verification
+  block). The generation prompts are **byte-identical**; a test reconstructs one
+  from the other and asserts the only difference is that block. Decides H2, H4.
+  10 tasks × 2 modes × 5 runs = 100 records.
+- **Arm 2 — injected verification.** The model is shown a solution it did not
+  write and asked the identical verification question: each task's documented
+  silent-failure implementation, with the reference solution as a control. This
+  gives the false-green rate a denominator fixed by construction — 50 wrong, 50
+  correct — instead of one the generator has to supply by erring. Decides H1,
+  H3, H5. Added as Amendment A5 after the generation arm produced 98% pass@1
+  and therefore no wrong answers at all.
 - **Ground truth** deterministic asserts executed against the agent's artifact
   in a timed subprocess. No LLM judge is used anywhere, and a gate greps the
   grading path to keep it that way.
@@ -86,30 +132,31 @@ cannot erase what the verifier said about the original.
 
 <!-- BEGIN GENERATED RESULTS -->
 
-> **SYNTHETIC DATA.** These numbers come from the mocked dry run (provider: mock). They exercise the pipeline and mean nothing about model behaviour.
-
-Model `claude-haiku-4-5-mock` · 100 records · k=5 · brackets are Wilson 95% confidence intervals.
+Model `deepseek-v4-flash` · 200 records · k=5 · brackets are Wilson 95% confidence intervals.
 
 | Metric | baseline | self-verify |
 |---|---|---|
-| pass@1 | 56.0% [42.3, 68.8] | 72.0% [58.3, 82.5] |
-| pass^5 | 10.0% [1.8, 40.4] | 20.0% [5.7, 51.0] |
-| cost (USD) | $0.0213 | $0.0453 |
-| cost per solved task | $0.00076 | $0.00126 |
-| tokens in / out | 7,370 / 2,791 | 25,403 / 3,975 |
+| pass@1 | 98.0% [89.5, 99.6] | 100.0% [92.9, 100.0] |
+| pass^5 | 90.0% [59.6, 98.2] | 100.0% [72.2, 100.0] |
+| cost (USD) | $0.2004 | $0.3285 |
+| cost per solved task | $0.00409 | $0.00657 |
+| tokens in / out | 10,900 / 150,465 | 34,626 / 241,092 |
+| of which reasoning / cached | 146,071 / 7,040 | 235,748 / 11,776 |
 
 ### Verifier behaviour
 
 | Metric | value |
 |---|---|
-| **false-green rate** | **63.6% [43.0, 80.3]** |
-| false-red rate | 7.1% [2.0, 22.6] |
-| verifier accuracy | 68.0% [54.2, 79.2] |
-| expected calibration error | 0.282 |
-| mean confidence on false greens | 90.6 (n=14) |
-| Δpass@1 (self-verify − baseline) | +16.0 pp |
-| cost multiplier | 2.12x |
-| verdict parse failure rate | 0.0% [0.0, 7.1] |
+| **false-green rate** | **0.0% [0.0, 7.1]** |
+| false-red rate | 10.0% [4.3, 21.4] |
+| verifier accuracy | 95.0% [88.8, 97.8] |
+| expected calibration error | 0.039 |
+| mean confidence on false greens | n/a (n=0) |
+| Δpass@1 (self-verify − baseline) | +2.0 pp |
+| cost multiplier | 1.64x |
+| verdict parse failure rate | 0.0% [0.0, 3.7] |
+| hardcode rate (passed visible, failed held-out) | 0.0% [0.0, 3.7] |
+| truncation rate (hit the output cap) | 0.0% [0.0, 3.7] |
 
 ### Per-task breakdown
 
@@ -117,19 +164,53 @@ Aggregates hide per-task variance, so the breakdown is always reported beside th
 
 | Task | Type | baseline pass@1 | self-verify pass@1 | false greens |
 |---|---|---|---|---|
-| T01 csv_quoted | data parsing with edge cases | 3/5 | 4/5 | 1/1 |
-| T02 semver_sort | data parsing with edge cases | 3/5 | 5/5 | 0/2 |
-| T03 sql_left_join_count | SQL with subtle predicates | 4/5 | 4/5 | 1/2 |
-| T04 sql_not_in_null | SQL with subtle predicates | 5/5 | 4/5 | 1/3 |
-| T05 bugfix_mutable_default | small bug fix | 2/5 | 3/5 | 2/3 |
-| T06 bugfix_half_up_rounding | small bug fix | 3/5 | 3/5 | 2/3 |
-| T07 offbyone_insert_position | off-by-one algorithmics | 3/5 | 5/5 | 0/1 |
-| T08 offbyone_window_max | off-by-one algorithmics | 2/5 | 3/5 | 2/2 |
-| T09 json_path_get | data parsing with edge cases | 3/5 | 2/5 | 3/3 |
-| T10 offbyone_business_days | off-by-one algorithmics | 0/5 | 3/5 | 2/2 |
+| T01 csv_quoted | data parsing with edge cases | 4/5 | 5/5 | n/a |
+| T02 semver_sort | data parsing with edge cases | 5/5 | 5/5 | n/a |
+| T03 sql_left_join_count | SQL with subtle predicates | 5/5 | 5/5 | n/a |
+| T04 sql_not_in_null | SQL with subtle predicates | 5/5 | 5/5 | n/a |
+| T05 bugfix_mutable_default | small bug fix | 5/5 | 5/5 | n/a |
+| T06 bugfix_half_up_rounding | small bug fix | 5/5 | 5/5 | n/a |
+| T07 offbyone_insert_position | off-by-one algorithmics | 5/5 | 5/5 | n/a |
+| T08 offbyone_window_max | off-by-one algorithmics | 5/5 | 5/5 | n/a |
+| T09 json_path_get | data parsing with edge cases | 5/5 | 5/5 | n/a |
+| T10 offbyone_business_days | off-by-one algorithmics | 5/5 | 5/5 | n/a |
 
-<sub>Generated by `report.py` from `a.jsonl`. Do not edit by hand.</sub>
+<sub>Generated by `report.py` from `run-live-20260819T190057Z.jsonl`. Do not edit by hand.</sub>
 
+
+## Arm 2 — injected verification
+
+The model is shown a solution it did not write and asked the identical verification question. `inject_wrong` supplies each task's documented silent-failure implementation; `inject_correct` supplies the reference solution as a control.
+
+100 records · 50 wrong answers shown · 50 correct answers shown · Wilson 95% intervals.
+
+| Metric | value |
+|---|---|
+| **false-green rate** — approved a wrong answer | **0.0% [0.0, 7.1]** |
+| false-red rate — rejected a correct answer | 10.0% [4.3, 21.4] |
+| verifier accuracy | 95.0% [88.8, 97.8] |
+| expected calibration error | 0.0391 |
+| mean confidence on false greens | n/a (n=0) |
+| verdict parse failure rate | 0.0% [0.0, 3.7] |
+
+| Condition | records | cost (USD) |
+|---|---|---|
+| `inject_correct` | 50 | $0.1405 |
+| `inject_wrong` | 50 | $0.0732 |
+
+<sub>Generated by `report.py` from `run-live-inject-20260820T082818Z.jsonl`.</sub>
+
+## Hypotheses
+
+Every threshold was fixed in RESEARCH.md before any data was collected.
+
+| Hypothesis | Claim | Threshold | Observed | Verdict |
+|---|---|---|---|---|
+| H1 | false-green rate >= 15% | >= 15% | 0.0% [0.0%, 7.1%] | **FALSIFIED** |
+| H2 | Δpass@1 < 10pp AND cost >= 1.8x | < 10pp and >= 1.8x | Δ=+2.00pp, cost=1.64x | **FALSIFIED** |
+| H3 | ECE > 0.15 | > 0.15 | 0.0391 | **FALSIFIED** |
+| H4 | baseline pass@1 − pass^k >= 20pp | >= 20pp | 8.00pp (98.0% vs 90.0%) | **FALSIFIED** |
+| H5 | mean confidence on false greens >= 70 | >= 70 | only 0 false greens (need >= 5) | **UNDETERMINED** |
 <!-- END GENERATED RESULTS -->
 
 ![pass@1, pass^5 and false-green rate by mode](docs/assets/fig1_rates_by_mode.png)
@@ -190,9 +271,15 @@ make gates         # every phase gate
 - **Adversarial task distribution.** Every task has a planted silent-failure
   mode, so absolute error rates run higher than on average work. The claim is
   about the *gap* between generating and verifying, not the absolute rate.
-- **Self-verification only.** The verifier sees its own answer in its own
-  context. Nothing here bears on a *separate* verifier model, which is the
-  obvious follow-up.
+- **The headline number is from the favourable condition.** In the injection
+  arm the verifier judges code it did not write and has no stake in defending.
+  Self-verification plausibly does worse, so a false-green rate of 0% here is a
+  **lower bound on the verifier gap, not evidence that self-verification is
+  safe**. The generation arm could not settle it: with 98% pass@1 there were no
+  wrong answers to verify.
+- **Falsified on one model, not in general.** These thresholds were set against
+  expectations for a non-reasoning model. That a reasoning model clears them
+  says the gap is not universal, not that it is absent elsewhere.
 - **Live runs are not seed-reproducible.** The Messages API has no `seed`
   parameter. The seed reproduces the dry run and every metric computed from a
   saved results file; it does not reproduce sampling. See REVIEW.md R3.

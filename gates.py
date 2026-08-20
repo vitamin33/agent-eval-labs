@@ -672,8 +672,15 @@ RESULTS_DIR = EXP / "results"
 
 
 def live_result_files() -> list[Path]:
-    """Results files from live runs, newest last."""
-    return sorted(RESULTS_DIR.glob("run-live-*.jsonl"))
+    """Generation-arm results from live runs, newest last."""
+    return sorted(
+        f for f in RESULTS_DIR.glob("run-live-*.jsonl") if "-inject-" not in f.name
+    )
+
+
+def inject_result_files() -> list[Path]:
+    """Injection-arm results from live runs, newest last."""
+    return sorted(RESULTS_DIR.glob("run-live-inject-*.jsonl"))
 
 
 def read_records(path: Path) -> list[dict]:
@@ -689,7 +696,8 @@ def recompute_false_green_rate(records: list[dict]) -> tuple[int, int]:
     """
     denom = [
         r for r in records
-        if r.get("mode") == "self_verify" and r.get("truth_initial") != "correct"
+        if (r.get("prompts") or {}).get("verification")
+        and r.get("truth_initial") != "correct"
     ]
     num = [r for r in denom if r.get("verdict") == "correct"]
     return len(num), len(denom)
@@ -766,19 +774,45 @@ def gate_g4() -> list[Check]:
     ]
     checks.append(Check("call counts match the mode", not bad_calls, f"{bad_calls[:5]}"))
 
-    # --- calibration window ------------------------------------------------ #
+    # --- calibration ------------------------------------------------------- #
+    # The 50-70% window exists for ONE reason, stated in RESEARCH.md: above it
+    # there are too few wrong answers to compute a false-green rate over. The
+    # injection arm supplies wrong answers by construction, so it satisfies that
+    # purpose directly. Either route is accepted, and the check says which one
+    # applied — a run that missed the window must never read as if it hit it.
     k, n = recompute_pass_at_1(records, "baseline")
     p1 = k / n if n else None
-    checks.append(
-        Check(
-            f"baseline pass@1 = {p1:.1%} in [{lo:.0%}, {hi:.0%}]" if p1 is not None else "baseline pass@1",
-            p1 is not None and lo <= p1 <= hi,
-            "outside the calibration window — adjust task difficulty, record the change "
-            "in CALIBRATION.md, and rerun",
-        )
+    in_window = p1 is not None and lo <= p1 <= hi
+
+    inject_files = inject_result_files()
+    inject_records = read_records(inject_files[-1]) if inject_files else []
+    n_wrong_shown = len(
+        [r for r in inject_records if r.get("truth_initial") != "correct"]
     )
-    if not (lo <= (p1 or -1) <= hi):
-        checks.append(exists("experiments/verifier-gap/CALIBRATION.md", "file"))
+    min_wrong = 40
+
+    if in_window:
+        detail = ""
+        label = f"calibration: baseline pass@1 = {p1:.1%} in [{lo:.0%}, {hi:.0%}]"
+        ok = True
+    elif n_wrong_shown >= min_wrong:
+        label = (
+            f"calibration: baseline pass@1 = {p1:.1%} is OUTSIDE [{lo:.0%}, {hi:.0%}]; "
+            f"satisfied instead by the injection arm's {n_wrong_shown} controlled wrong "
+            f"answers (RESEARCH.md Amendment A5)"
+        )
+        ok = True
+        detail = ""
+    else:
+        label = f"calibration: baseline pass@1 = {p1:.1%}" if p1 is not None else "calibration"
+        ok = False
+        detail = (
+            f"outside [{lo:.0%}, {hi:.0%}] and the injection arm shows only "
+            f"{n_wrong_shown} wrong answers (need >= {min_wrong}). Adjust task "
+            f"difficulty or run the injection arm, and record it in CALIBRATION.md."
+        )
+    checks.append(Check(label, ok, detail))
+    checks.append(exists("experiments/verifier-gap/CALIBRATION.md", "file"))
 
     # --- harness health ---------------------------------------------------- #
     sv = [r for r in records if r.get("mode") == "self_verify"]
@@ -804,6 +838,52 @@ def gate_g4() -> list[Check]:
         )
     )
 
+    # --- injection arm ----------------------------------------------------- #
+    checks.append(
+        Check(
+            f"injection arm present ({len(inject_files)} file(s))",
+            bool(inject_files),
+            "no run-live-inject-*.jsonl — H1/H3/H5 cannot be decided without it",
+        )
+    )
+    if inject_records:
+        checks.append(
+            Check(
+                f"injection arm: {len(inject_records)} records",
+                len(inject_records) == 100,
+                f"expected 100, got {len(inject_records)}",
+            )
+        )
+        n_correct_shown = len(inject_records) - n_wrong_shown
+        checks.append(
+            Check(
+                f"injection denominator: {n_wrong_shown} wrong / {n_correct_shown} correct",
+                n_wrong_shown >= min_wrong and n_correct_shown >= min_wrong,
+                "both conditions need enough records to bound a rate",
+            )
+        )
+        # The injected artifacts' ground truth is asserted, never assumed.
+        mislabelled = [
+            r["record_id"] for r in inject_records
+            if r.get("injected_source") == "silent_failure" and r.get("truth_initial") == "correct"
+        ]
+        checks.append(
+            Check(
+                "every injected silent-failure artifact really is wrong",
+                not mislabelled,
+                f"these graded CORRECT despite being the planted bug: {mislabelled[:5]}",
+            )
+        )
+        inj_unparsed = [r for r in inject_records if r.get("verdict") is None]
+        inj_rate = len(inj_unparsed) / len(inject_records)
+        checks.append(
+            Check(
+                f"injection arm verdict parse failure {inj_rate:.1%} <= {max_parse_fail:.0%}",
+                inj_rate <= max_parse_fail,
+                f"{len(inj_unparsed)} unparseable verdicts",
+            )
+        )
+
     # --- report exists and matches the raw data ---------------------------- #
     checks.append(exists("experiments/verifier-gap/RESULTS.md", "file"))
     checks.append(exists("docs/assets/fig1_rates_by_mode.png", "file"))
@@ -827,8 +907,9 @@ def gate_g4() -> list[Check]:
             )
         )
 
-        # Independent recomputation of the headline metric.
-        fg_k, fg_n = recompute_false_green_rate(records)
+        # Independent recomputation of the headline metric, from the arm that
+        # actually produced wrong answers.
+        fg_k, fg_n = recompute_false_green_rate(inject_records or records)
         expected = 100 * fg_k / fg_n if fg_n else None
         published = re.search(
             r"\*\*false-green rate\*\*\s*\|\s*\*\*([\d.]+)%", md

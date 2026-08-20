@@ -19,7 +19,13 @@ import pytest  # noqa: E402
 
 
 def make_record(**overrides) -> dict:
-    """A schema-valid record, for tests that need to inject specific states."""
+    """A schema-valid record, for tests that need to inject specific states.
+
+    `prompts.verification` follows the mode, as the runner sets it: baseline
+    makes no verification call and therefore carries no verification prompt.
+    That is what metrics uses to decide which records were verified.
+    """
+    mode = overrides.get("mode", "self_verify")
     rec = {
         "schema_version": 1,
         "record_id": "T01|self_verify|0",
@@ -34,7 +40,11 @@ def make_record(**overrides) -> dict:
         "model_resolved": "claude-haiku-4-5",
         "temperature": 0.0,
         "seed": 1,
-        "prompts": {"system": "s", "generation": "g", "verification": "v"},
+        "prompts": {
+            "system": "s",
+            "generation": "g",
+            "verification": None if mode == "baseline" else "v",
+        },
         "completion_generation": "",
         "completion_verification": "",
         "grade_initial": {"outcome": "wrong"},

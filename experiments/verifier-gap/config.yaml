@@ -42,9 +42,22 @@ max_tokens: 49152
 
 # --- matrix ---------------------------------------------------------------- #
 runs_per_cell: 5          # k, for pass^k
+
+# Arm 1 — generation. Measures whether self-verification improves the model's
+# own answers (H2, H4).
 modes:
   - baseline
   - self_verify
+
+# Arm 2 — injected verification. The model is shown a solution it did not write
+# and asked the identical verification question. `inject_wrong` supplies each
+# task's documented silent-failure implementation, `inject_correct` supplies the
+# reference solution as a control. This gives false_green_rate a denominator we
+# control instead of one the generator has to supply by erring (H1, H3, H5).
+# See RESEARCH.md Amendment A5.
+inject_modes:
+  - inject_wrong
+  - inject_correct
 
 # The API has no seed parameter. This seeds the harness only: task ordering,
 # run indexing, and dry-run mock responses. It does NOT make live sampling

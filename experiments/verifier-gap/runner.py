@@ -58,20 +58,34 @@ def _call_record(stage: str, result) -> dict:
     }
 
 
+INJECT_SOURCE = {"inject_wrong": "silent_failure", "inject_correct": "reference"}
+
+
 def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
     """Execute one (task, mode, run_index) cell and return its record."""
     t_start = time.perf_counter()
     trace = {"task_id": task["id"], "mode": mode, "run_index": run_index}
     calls: list[dict] = []
+    injected = mode in INJECT_SOURCE
 
-    # --- generation: identical request in both modes ----------------------- #
-    gen_messages = prompts.generation_messages(task)
-    gen = provider.complete(
-        prompts.SYSTEM, gen_messages, trace={**trace, "stage": "generation"}
-    )
-    calls.append(_call_record("generation", gen))
+    if injected:
+        # No generation call: the answer is supplied, so the arm measures
+        # verification alone, on a denominator we control.
+        answer = prompts.as_assistant_answer(task[INJECT_SOURCE[mode]], task["kind"])
+        gen = None
+    else:
+        # --- generation: identical request in both modes ------------------- #
+        gen_messages = prompts.generation_messages(task)
+        gen = provider.complete(
+            prompts.SYSTEM, gen_messages, trace={**trace, "stage": "generation"}
+        )
+        calls.append(_call_record("generation", gen))
+        answer = gen.text
 
-    grade_initial: Grade = grade_completion(gen.text, task, timeout_s=cfg.grading_timeout_s)
+    # The injected artifact's ground truth is asserted, not assumed: if a
+    # silent-failure implementation ever passed, the arm would be measuring
+    # nothing and this makes that visible in the data.
+    grade_initial: Grade = grade_completion(answer, task, timeout_s=cfg.grading_timeout_s)
     grade_final = grade_initial
     verification_prompt = None
     verification_text = None
@@ -79,8 +93,8 @@ def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
     revised_applied = False
 
     # --- verification: the ONLY difference between the two modes ----------- #
-    if mode == "self_verify":
-        ver_messages = prompts.verification_messages(task, gen.text)
+    if mode == "self_verify" or injected:
+        ver_messages = prompts.verification_messages(task, answer)
         verification_prompt = prompts.VERIFICATION_BLOCK
         ver = provider.complete(
             prompts.SYSTEM,
@@ -99,6 +113,12 @@ def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
         if v.verdict == "wrong" and v.revised:
             grade_final = grade_completion(v.revised, task, timeout_s=cfg.grading_timeout_s)
             revised_applied = True
+
+    if injected:
+        # Nothing was generated; the "completion" is the supplied artifact.
+        gen_text = answer
+    else:
+        gen_text = gen.text
 
     in_tok = sum(c["input_tokens"] for c in calls)
     out_tok = sum(c["output_tokens"] for c in calls)
@@ -126,7 +146,9 @@ def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
             "generation": prompts.generation_prompt(task),
             "verification": verification_prompt,
         },
-        "completion_generation": gen.text,
+        "completion_generation": gen_text,
+        "injected": injected,
+        "injected_source": INJECT_SOURCE.get(mode),
         "completion_verification": verification_text,
         "grade_initial": grade_initial.to_dict(),
         "grade_final": grade_final.to_dict(),
@@ -150,18 +172,19 @@ def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
     }
 
 
-def run_matrix(cfg, *, dry_run: bool, out_path: Path, progress=True) -> list[dict]:
+def run_matrix(cfg, *, dry_run: bool, out_path: Path, progress=True, modes=None) -> list[dict]:
     tasks = load_tasks()
     provider = build_provider(cfg, dry_run=dry_run, tasks={t["id"]: t for t in tasks})
+    modes = tuple(modes) if modes else cfg.modes
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     records: list[dict] = []
-    total = len(tasks) * len(cfg.modes) * cfg.runs_per_cell
+    total = len(tasks) * len(modes) * cfg.runs_per_cell
     n = 0
     # Deterministic order: task, then mode, then run index.
     with out_path.open("a", encoding="utf-8") as fh:
         for task in tasks:
-            for mode in cfg.modes:
+            for mode in modes:
                 for run_index in range(cfg.runs_per_cell):
                     rec = run_record(provider, cfg, task, mode, run_index)
                     fh.write(json.dumps(rec, sort_keys=True) + "\n")
@@ -186,6 +209,12 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--dry-run", action="store_true", help="offline, seeded mock responses")
     mode.add_argument("--live", action="store_true", help="call the Anthropic API")
     ap.add_argument("--config", default=str(config_mod.DEFAULT_CONFIG))
+    ap.add_argument(
+        "--arm",
+        choices=["generation", "injection"],
+        default="generation",
+        help="generation: baseline vs self-verify. injection: verify supplied answers.",
+    )
     ap.add_argument("--out", default=None, help="output .jsonl path")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
@@ -199,7 +228,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         kind = "dry" if args.dry_run else "live"
-        out_path = RESULTS_DIR / f"run-{kind}-{stamp}.jsonl"
+        suffix = "" if args.arm == "generation" else "-inject"
+        out_path = RESULTS_DIR / f"run-{kind}{suffix}-{stamp}.jsonl"
 
     # A results file is append-only; refuse to reopen a completed run.
     if out_path.exists() and out_path.stat().st_size > 0:
@@ -211,7 +241,14 @@ def main(argv: list[str] | None = None) -> int:
           f"temperature={cfg.temperature} max_tokens={cfg.max_tokens} "
           f"k={cfg.runs_per_cell} pricing_tier={cfg.pricing_tier}")
     print(f"writing {out_path}")
-    records = run_matrix(cfg, dry_run=args.dry_run, out_path=out_path, progress=not args.quiet)
+    modes = cfg.modes if args.arm == "generation" else cfg.inject_modes
+    if not modes:
+        print(f"no modes configured for arm {args.arm!r}", file=sys.stderr)
+        return 2
+    print(f"arm={args.arm} modes={list(modes)}")
+    records = run_matrix(
+        cfg, dry_run=args.dry_run, out_path=out_path, progress=not args.quiet, modes=modes
+    )
 
     cost = sum(r["cost_usd"] for r in records)
     print(f"\n{len(records)} records -> {out_path}")

@@ -94,3 +94,45 @@ def test_live_results_carry_no_synthetic_banner():
     records = [make_record(provider="deepseek", mode="baseline", verdict=None)]
     md = report.results_markdown(metrics.summarize(records, k=1), "run-live.jsonl")
     assert "SYNTHETIC DATA" not in md
+
+
+# --- two-arm reporting ------------------------------------------------------ #
+
+
+def _summ(**over):
+    from conftest import make_record
+
+    s = metrics.summarize([make_record(mode="baseline", verdict=None)], k=1)
+    s.update(over)
+    return s
+
+
+def test_combined_summary_takes_verification_from_the_injection_arm():
+    """H1/H3/H5 come from the arm that has wrong answers; H2/H4 from generation."""
+    gen = _summ(n_records=100)
+    gen["false_green_rate"] = {"value": None, "ci_low": None, "ci_high": None, "n": 0, "k": 0}
+    inj = _summ(n_records=100)
+    inj["false_green_rate"] = {"value": 0.3, "ci_low": 0.2, "ci_high": 0.4, "n": 50, "k": 15}
+    inj["n_false_greens"] = 15
+    merged = report.combined_summary(gen, inj)
+    assert merged["false_green_rate"]["value"] == 0.3
+    assert merged["n_false_greens"] == 15
+    assert merged["n_records"] == 200
+    assert merged["arm"] == "combined"
+
+
+def test_combined_summary_passes_through_a_single_arm():
+    gen = _summ(n_records=100)
+    assert report.combined_summary(gen, None) is gen
+    inj = _summ(n_records=42)
+    assert report.combined_summary(None, inj) is inj
+
+
+def test_injection_markdown_reports_the_controlled_denominator():
+    inj = _summ(n_records=100)
+    inj["false_green_rate"] = {"value": 0.0, "ci_low": 0.0, "ci_high": 0.07, "n": 50, "k": 0}
+    inj["false_red_rate"] = {"value": 0.02, "ci_low": 0.0, "ci_high": 0.1, "n": 50, "k": 1}
+    md = report.injection_markdown(inj, "run-live-inject.jsonl")
+    assert "50 wrong answers shown" in md
+    assert "false-green rate" in md
+    assert "run-live-inject.jsonl" in md

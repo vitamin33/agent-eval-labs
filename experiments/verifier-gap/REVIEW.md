@@ -22,7 +22,7 @@ verdict and a link to the test or code that settles it.
 | R1.8 Solution hardcoded to the assert inputs | **FIXED** | `tests/test_adversarial.py::test_lookup_table_keyed_on_the_visible_cases_is_caught` |
 | R2 Ground truth depends on output format | **CLEAR** | `tests/test_adversarial.py::test_grade_is_invariant_to_response_formatting` |
 | R3 Seeds claimed to reproduce live runs | **SCOPED** | `tests/test_reproducibility.py::test_the_api_is_never_sent_a_seed_parameter` |
-| R4 Conclusions rest on the two hardest tasks | **PENDING LIVE DATA** | `experiments/verifier-gap/sensitivity.py` |
+| R4 Conclusions rest on the two hardest tasks | **CLEAR** | `experiments/verifier-gap/sensitivity.py` |
 | R5 Float noise flips a hypothesis verdict | **FIXED** | `tests/test_hypotheses.py::test_ece_noise_cannot_support_h3` |
 | R6 Executing model-generated code | **ACCEPTED** | `grade.py` module docstring |
 
@@ -218,17 +218,29 @@ two different claims.
 
 ## R4 — Sensitivity: would conclusions flip if the 2 hardest tasks were removed?
 
-**Verdict: pending live data.** The analysis is implemented and tested
-(`sensitivity.py`); it drops the two tasks with the lowest baseline pass@1,
-recomputes all five hypotheses, and reports any verdict that flips. Running it
-on the mocked dry run exercises the path and correctly detects flips when they
-occur. The verdict for the real experiment cannot be written until Phase 4 has
-run, and this section will be replaced with its output rather than a
-prediction.
+**Verdict: clear. No conclusion is sensitive to them.**
 
-Because n = 10, this section is expected to matter. If a conclusion does flip,
-it will be reported as sensitive to task selection in the README rather than
-dropped.
+This is the leave-hardest-out sensitivity analysis. Both arms are dropped
+together, so the combined verdicts are recomputed on a
+genuinely smaller task set rather than a mismatched pair of them. Dropping T01
+and T02 (the two lowest by baseline pass@1) takes 200 records to 160:
+
+| Hypothesis | Full set | Hardest two removed | Flips? |
+|---|---|---|---|
+| H1 | FALSIFIED (0.0% [0.0, 7.1]) | FALSIFIED (0.0% [0.0, 8.8]) | no |
+| H2 | FALSIFIED (Δ=+2.00pp, cost=1.64x) | FALSIFIED (Δ=+0.00pp, cost=1.49x) | no |
+| H3 | FALSIFIED (0.0391) | FALSIFIED (0.0401) | no |
+| H4 | FALSIFIED (8.00pp) | FALSIFIED (0.00pp) | no |
+| H5 | UNDETERMINED (0 false greens) | UNDETERMINED (0 false greens) | no |
+
+The result is robust in the direction that matters least and most: the
+falsifications hold, and H5 stays honestly undetermined rather than becoming
+decidable through a smaller denominator.
+
+One caveat worth stating: with baseline pass@1 at 98%, "hardest" is a weak
+ordering — T01 (4/5) is the only task with any miss at all, and the second pick
+is a tie broken by task id. The analysis is therefore less informative here than
+it would be on a task set that produced a spread of difficulties.
 
 ## R5 — Float noise on a hypothesis boundary (**was a live bug, twice**)
 

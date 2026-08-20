@@ -50,6 +50,7 @@ class Config:
     max_tokens: int
     runs_per_cell: int
     modes: tuple[str, ...]
+    inject_modes: tuple[str, ...]
     seed: int
     pricing_tier: str
     price_in_miss_per_mtok: float
@@ -117,6 +118,11 @@ def load(path: str | Path = DEFAULT_CONFIG) -> Config:
         )
 
     modes = tuple(data["modes"])
+    inject_modes = tuple(data.get("inject_modes", ()))
+    if inject_modes and set(inject_modes) != {"inject_wrong", "inject_correct"}:
+        raise ConfigError(
+            f"inject_modes must be exactly [inject_wrong, inject_correct], got {list(inject_modes)}"
+        )
     if set(modes) != {"baseline", "self_verify"}:
         raise ConfigError(f"modes must be exactly [baseline, self_verify], got {list(modes)}")
     if int(data["runs_per_cell"]) < 1:
@@ -146,6 +152,7 @@ def load(path: str | Path = DEFAULT_CONFIG) -> Config:
         max_tokens=int(data["max_tokens"]),
         runs_per_cell=int(data["runs_per_cell"]),
         modes=modes,
+        inject_modes=inject_modes,
         seed=int(data["seed"]),
         pricing_tier=tier,
         price_in_miss_per_mtok=float(rates["input_cache_miss_per_mtok"]),

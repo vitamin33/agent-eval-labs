@@ -266,166 +266,181 @@ easy, which is precisely the asymmetry under test.
 ### T01 — csv_quoted
 
 - **Type:** data parsing with edge cases
-- **Prompt asks for:** `parse_csv_line(line, delimiter=',')` splitting one CSV record into fields.
-- **Silent-failure mode:** `line.split(delimiter)` — correct on `a,b,c`, wrong on a quoted field containing the delimiter, on a doubled `""` escape, and on an unterminated quote. The added delimiter parameter and unterminated-quote rule interact: a parser that special-cases commas passes the first cases and fails the rest.
-- **Assert spec:** 8 visible checks, plus 5 held-out checks not shown here or in the prompt (Amendment A1).
+- **Prompt asks for:** `parse_csv_line(line: str) -> list[str]` splitting one
+  RFC4180 record into fields.
+- **Silent-failure mode:** `line.split(",")` — correct on `a,b,c`, wrong on a
+  quoted field containing a comma, and wrong again on a doubled `""` escape.
+- **Assert spec:**
 ```text
-parse_csv_line('a,b,c') == ['a', 'b', 'c']
-parse_csv_line('"a,b",c') == ['a,b', 'c']
-parse_csv_line('"say ""hi""",x') == ['say "hi"', 'x']
-parse_csv_line('a,,c') == ['a', '', 'c']
-parse_csv_line('a;b;c', ';') == ['a', 'b', 'c']
-parse_csv_line('"x;y";z', ';') == ['x;y', 'z']
-parse_csv_line(' a , b ') == [' a ', ' b ']
-parse_csv_line('"unterminated,rest') == ['unterminated,rest']
+parse_csv_line('a,b,c')            == ['a', 'b', 'c']
+parse_csv_line('"a,b",c')          == ['a,b', 'c']
+parse_csv_line('"say ""hi""",x')   == ['say "hi"', 'x']
+parse_csv_line('a,,c')             == ['a', '', 'c']
+parse_csv_line('')                 == ['']
+parse_csv_line('"",x')             == ['', 'x']
 ```
 
 ### T02 — semver_sort
 
 - **Type:** data parsing with edge cases
-- **Prompt asks for:** `sort_versions(versions)` ascending by semantic-version precedence, including pre-releases.
-- **Silent-failure mode:** Lexicographic `sorted()` — wrong the moment a component reaches 10, and wrong in the opposite direction on pre-releases: `'1.0.0' < '1.0.0-alpha'` as text, while semver ranks the pre-release BELOW the release.
-- **Assert spec:** 6 visible checks, plus 4 held-out checks not shown here or in the prompt (Amendment A1).
+- **Prompt asks for:** `sort_versions(versions: list[str]) -> list[str]`
+  ascending by numeric semver precedence.
+- **Silent-failure mode:** lexicographic `sorted()` — correct on single-digit
+  versions, wrong the moment a component reaches 10.
+- **Assert spec:**
 ```text
-sort_versions(['1.9.0', '1.10.0']) == ['1.9.0', '1.10.0']
-sort_versions(['1.0.0', '1.0.0-alpha']) == ['1.0.0-alpha', '1.0.0']
-sort_versions(['1.0.0-beta', '1.0.0-alpha']) == ['1.0.0-alpha', '1.0.0-beta']
-sort_versions(['1.0.0-alpha.10', '1.0.0-alpha.2']) == ['1.0.0-alpha.2', '1.0.0-alpha.10']
-sort_versions(['2.0.0', '10.0.0', '1.0.0']) == ['1.0.0', '2.0.0', '10.0.0']
-sort_versions([]) == []
+sort_versions(['1.9.0', '1.10.0'])            == ['1.9.0', '1.10.0']
+sort_versions(['1.0.10', '1.0.9', '1.0.2'])   == ['1.0.2', '1.0.9', '1.0.10']
+sort_versions(['2.0.0', '10.0.0', '1.0.0'])   == ['1.0.0', '2.0.0', '10.0.0']
+sort_versions([])                             == []
+sort_versions(['1.0.0'])                      == ['1.0.0']
 ```
 
 ### T03 — sql_left_join_count
 
 - **Type:** SQL with subtle predicates
-- **Prompt asks for:** a query returning every customer's name, non-cancelled order count, and spend.
-- **Silent-failure mode:** Filtering `status <> 'cancelled'` in `WHERE` instead of inside the aggregate silently converts the LEFT JOIN back into an inner join, dropping every customer with no orders AND every customer whose orders were all cancelled. The query reads as obviously correct. `SUM` over no rows also yields NULL rather than 0.0.
-- **Assert spec:** 6 visible checks, plus 3 held-out checks not shown here or in the prompt (Amendment A1). SQL tasks are additionally re-run against a second fixture.
+- **Prompt asks for:** a query returning every customer with their order count,
+  including customers who have never ordered, ordered by name.
+- **Silent-failure mode:** `INNER JOIN` silently drops zero-order customers; or
+  `COUNT(*)` on a LEFT JOIN counts the null-filled row as 1 instead of 0.
+- **Assert spec:** executed against a fixed SQLite fixture (3 customers, one
+  with no orders). Checked as an ordered row list, so a query that drops the
+  zero-order customer, emits 1 instead of 0, or loses the ordering all fail
+  distinguishably.
 ```text
-rows == [('Ada', 2, 65.0), ('Linus', 1, 15.0), ('Grace', 0, 0.0)]
-len(rows) == 3
-[r[0] for r in rows] == ['Ada', 'Linus', 'Grace']
-dict((r[0], r[1]) for r in rows)['Grace'] == 0
-dict((r[0], r[2]) for r in rows)['Grace'] == 0.0
+rows                    == [('Ada', 2), ('Grace', 0), ('Linus', 1)]
+len(rows)               == 3
+dict(rows)['Grace']     == 0
+dict(rows)['Grace']     is not None
+[r[0] for r in rows]    == ['Ada', 'Grace', 'Linus']
 all(isinstance(r[1], int) for r in rows)
 ```
 
 ### T04 — sql_not_in_null
 
 - **Type:** SQL with subtle predicates
-- **Prompt asks for:** products never genuinely ordered, where an order needs a positive quantity.
-- **Silent-failure mode:** `WHERE id NOT IN (SELECT product_id ...)` returns the EMPTY set whenever the subquery yields a NULL, because `x NOT IN (..., NULL)` is UNKNOWN. Adding the `qty > 0` condition inside the subquery quietly changes which rows land in the exclusion set.
-- **Assert spec:** 6 visible checks, plus 3 held-out checks not shown here or in the prompt (Amendment A1). SQL tasks are additionally re-run against a second fixture.
+- **Prompt asks for:** products that have never been ordered, where
+  `orders.product_id` is nullable.
+- **Silent-failure mode:** `WHERE id NOT IN (SELECT product_id FROM orders)`
+  returns the **empty set** whenever the subquery yields a NULL, because
+  `x NOT IN (..., NULL)` is UNKNOWN. Looks correct, quietly returns nothing.
+- **Assert spec:** fixed SQLite fixture with 4 products, of which 2 are
+  ordered, and one order row carrying `product_id IS NULL`. The empty-result
+  case is asserted separately, because that is exactly what the `NOT IN` bug
+  produces and it is the failure most likely to be waved through.
 ```text
-rows == [('Flange',), ('Sprocket',), ('Widget',)]
-len(rows) == 3
-rows != []
-('Flange',) in rows
-('Gizmo',) not in rows
+sorted(rows)   == [('Sprocket',), ('Widget',)]
+len(rows)      == 2
+rows           != []
+('Gizmo',)     not in rows
+('Cog',)       not in rows
 all(len(r) == 1 for r in rows)
 ```
 
 ### T05 — bugfix_mutable_default
 
 - **Type:** small bug fix
-- **Prompt asks for:** a fix for `add_item(item, bucket=[], limit=None)` keeping the most recent `limit` items.
-- **Silent-failure mode:** Three interacting bugs: the shared mutable default is invisible until the second call; `if limit:` treats a real `limit=0` as 'no limit'; and `bucket[:limit]` keeps the FIRST items where the spec says the last.
-- **Assert spec:** 6 visible checks, plus 4 held-out checks not shown here or in the prompt (Amendment A1).
+- **Prompt asks for:** fix `add_item(item, bucket=[])` so each call without an
+  explicit bucket starts empty.
+- **Silent-failure mode:** the bug is invisible on a single call and only
+  appears on the second — a first-call-only test passes.
+- **Assert spec:**
 ```text
-add_item('a') == ['a']
-add_item('b') == ['b']
-add_item('c', ['x']) == ['x', 'c']
-(add_item('a'), add_item('b'))[1] == ['b']
-add_item('d', ['a', 'b', 'c'], 2) == ['c', 'd']
-add_item('d', ['a', 'b'], 0) == []
+add_item('a')                 == ['a']
+add_item('b')                 == ['b']
+add_item('c', ['x'])          == ['x', 'c']
+add_item('a'); add_item('b')  == ['b']
 ```
 
 ### T06 — bugfix_half_up_rounding
 
 - **Type:** small bug fix
-- **Prompt asks for:** `round_money(x)` rounding to cents half-up, accepting floats and decimal strings.
-- **Silent-failure mode:** Python's `round()` is banker's rounding — `round(2.675, 2)` is 2.67 — and it loses money. The string-input requirement adds a second trap: `Decimal(float)` still yields 2.67 because the binary float is 2.67499...; only `Decimal(str(x))` is correct.
-- **Assert spec:** 8 visible checks, plus 4 held-out checks not shown here or in the prompt (Amendment A1).
+- **Prompt asks for:** `round_money(x: float) -> float` rounding to 2 decimals
+  half-**up**, for invoice totals.
+- **Silent-failure mode:** Python's `round()` is banker's rounding —
+  `round(2.675, 2)` is 2.67 and `round(0.125, 2)` is 0.12. Right on most inputs,
+  wrong on exact halves, and wrong in a direction that loses money.
+- **Assert spec:**
 ```text
-round_money(2.675) == 2.68
-round_money(0.125) == 0.13
-round_money(1.005) == 1.01
-round_money(2.674) == 2.67
+round_money(2.675)  == 2.68
+round_money(0.125)  == 0.13
+round_money(1.005)  == 1.01
+round_money(2.674)  == 2.67
 round_money(-1.005) == -1.01
-round_money('2.675') == 2.68
-round_money('0.125') == 0.13
-round_money(10.0) == 10.0
+round_money(10.0)   == 10.0
 ```
 
 ### T07 — offbyone_insert_position
 
 - **Type:** off-by-one algorithmics
-- **Prompt asks for:** `insert_position(sorted_list, target, key=None, descending=False)`, the leftmost index.
-- **Silent-failure mode:** A binary search that returns the RIGHTMOST position on duplicates passes on distinct input. `key` and `descending` compound it: the comparison must invert for descending while the leftmost rule stays, which a naive `<=` swap gets backwards.
-- **Assert spec:** 8 visible checks, plus 5 held-out checks not shown here or in the prompt (Amendment A1).
+- **Prompt asks for:** `insert_position(sorted_list, target) -> int`, the
+  leftmost index where `target` can be inserted keeping order (bisect_left).
+- **Silent-failure mode:** binary search that returns the rightmost position on
+  duplicates, or that is one off at the ends — passes on distinct-element input.
+- **Assert spec:**
 ```text
-insert_position([1, 3, 5], 3) == 1
-insert_position([1, 3, 3, 3, 5], 3) == 1
-insert_position([1, 3, 5], 0) == 0
-insert_position([1, 3, 5], 9) == 3
-insert_position([], 4) == 0
-insert_position([5, 3, 1], 3, None, True) == 1
-insert_position([5, 3, 3, 1], 3, None, True) == 1
-insert_position(['a', 'bb', 'ccc'], 'dd', len) == 1
+insert_position([1, 3, 5], 3)          == 1
+insert_position([1, 3, 3, 3, 5], 3)    == 1
+insert_position([1, 3, 5], 0)          == 0
+insert_position([1, 3, 5], 9)          == 3
+insert_position([], 4)                 == 0
+insert_position([2, 2], 2)             == 0
 ```
 
 ### T08 — offbyone_window_max
 
 - **Type:** off-by-one algorithmics
-- **Prompt asks for:** `max_window_sum(nums, k)` returning `(best_sum, start_index)`.
-- **Silent-failure mode:** `range(len(nums) - k)` drops the final window, so the answer is right whenever the max is not at the tail. Tie-breaking compounds it: `>=` keeps the LAST tied window where the spec demands the earliest, and `k <= 0` must be rejected rather than treated as valid.
-- **Assert spec:** 9 visible checks, plus 5 held-out checks not shown here or in the prompt (Amendment A1).
+- **Prompt asks for:** `max_window_sum(nums, k) -> int | None`, max sum of any
+  contiguous window of exactly length k.
+- **Silent-failure mode:** `range(len(nums) - k)` drops the final window — the
+  answer is right whenever the max is not at the tail.
+- **Assert spec:**
 ```text
-max_window_sum([1, 2, 3, 4], 2) == (7, 2)
-max_window_sum([5, 1, 1, 1], 2) == (6, 0)
-max_window_sum([1, 1, 1, 9], 2) == (10, 2)
-max_window_sum([1, 2, 3], 3) == (6, 0)
-max_window_sum([2, 2, 2], 2) == (4, 0)
-max_window_sum([1, 2], 3) is None
-max_window_sum([], 1) is None
-max_window_sum([1, 2, 3], 0) is None
-max_window_sum([-5, -1, -9], 2) == (-6, 0)
+max_window_sum([1, 2, 3, 4], 2)     == 7
+max_window_sum([5, 1, 1, 1], 2)     == 6
+max_window_sum([1, 1, 1, 9], 2)     == 10
+max_window_sum([1, 2, 3], 3)        == 6
+max_window_sum([1, 2], 3)           is None
+max_window_sum([], 1)               is None
+max_window_sum([-5, -1, -9], 2)     == -6
 ```
 
 ### T09 — json_path_get
 
 - **Type:** data parsing with edge cases
-- **Prompt asks for:** `json_get(data, path, default=None)` resolving a dotted path with negative indices.
-- **Silent-failure mode:** Truthiness (`if not value: return default`) collapses a legitimate `0`, `False`, `''` or `[]` into the default. Negative indices and numeric-looking DICT keys interact: treating any digit segment as an index breaks `{'1': 'x'}`, while ignoring the sign breaks `'a.-1'`.
-- **Assert spec:** 10 visible checks, plus 6 held-out checks not shown here or in the prompt (Amendment A1).
+- **Prompt asks for:** `json_get(data, path, default=None)` resolving a dotted
+  path with numeric list indices.
+- **Silent-failure mode:** using truthiness (`if not value: return default`)
+  collapses a legitimate `0`, `False`, `''` or `[]` into the default; and a key
+  present with value `None` is not the same as a missing key.
+- **Assert spec:**
 ```text
-json_get({'a': {'b': 1}}, 'a.b') == 1
-json_get({'a': {'b': 0}}, 'a.b', 'D') == 0
-json_get({'a': {'b': None}}, 'a.b', 'D') is None
-json_get({'a': [10, 20]}, 'a.1') == 20
-json_get({'a': [10, 20]}, 'a.-1') == 20
-json_get({'a': [10]}, 'a.5', 'D') == 'D'
-json_get({'1': 'x'}, '1') == 'x'
-json_get({'a': {'b': 1}}, 'a.c', 'D') == 'D'
-json_get({'a': {'b': False}}, 'a.b', 'D') is False
-json_get({}, 'a', 'D') == 'D'
+json_get({'a': {'b': 1}}, 'a.b')            == 1
+json_get({'a': {'b': 0}}, 'a.b', 'D')       == 0
+json_get({'a': {'b': None}}, 'a.b', 'D')    is None
+json_get({'a': [10, 20]}, 'a.1')            == 20
+json_get({'a': [10]}, 'a.5', 'D')           == 'D'
+json_get({'a': {'b': 1}}, 'a.c', 'D')       == 'D'
+json_get({'a': {'b': False}}, 'a.b', 'D')   is False
+json_get({}, 'a', 'D')                      == 'D'
 ```
 
 ### T10 — offbyone_business_days
 
 - **Type:** off-by-one algorithmics
-- **Prompt asks for:** `business_days(start_iso, end_iso, holidays=())` inclusive of both endpoints.
-- **Silent-failure mode:** Iterating `start` to `end` exclusive silently undercounts by one whenever the end date is a working day. Holidays compound it: subtracting every holiday in range double-counts a holiday that fell on a weekend and was never counted in the first place.
-- **Assert spec:** 8 visible checks, plus 5 held-out checks not shown here or in the prompt (Amendment A1).
+- **Prompt asks for:** `business_days(start_iso, end_iso) -> int`, weekdays
+  between two ISO dates **inclusive of both endpoints**.
+- **Silent-failure mode:** iterating `start` to `end` exclusive silently
+  undercounts by one whenever the end date is a weekday; leap day compounds it.
+- **Assert spec:**
 ```text
 business_days('2024-02-26', '2024-03-01') == 5
 business_days('2024-02-28', '2024-03-01') == 3
 business_days('2024-03-01', '2024-03-01') == 1
 business_days('2024-03-02', '2024-03-02') == 0
+business_days('2024-03-02', '2024-03-03') == 0
 business_days('2023-12-29', '2024-01-01') == 2
 business_days('2024-03-05', '2024-03-04') == 0
-business_days('2024-02-26', '2024-03-01', ['2024-02-28']) == 4
-business_days('2024-02-26', '2024-03-01', ['2024-03-02']) == 5
 ```
 
 ## Threats to validity, stated up front
@@ -525,7 +540,7 @@ construction and is what Phase 4 calibrates against.
 `deepseek-v4-flash`. The limitation was always "single model, single tier"; only
 the model's identity changed.
 
-### A4 — task difficulty (Phase 4, calibration round 1)
+### A4 — task difficulty (Phase 4, calibration round 1) — **REVERTED, see A5**
 
 **Reason.** Round 1 measured baseline pass@1 at **98%** (49/50), far above the
 50–70% window. Zero wrong answers reached the verifier, so `false_green_rate`
@@ -547,3 +562,69 @@ the current specs; CALIBRATION.md records the before/after per task.
 **Not changed.** No hypothesis, threshold, metric definition, or oracle
 behaviour. Difficulty is the only knob the calibration loop authorises, and it
 is the only one that moved.
+
+### A5 — the injected-verification arm (Phase 4, calibration round 2)
+
+**Reason.** Round 1 measured baseline pass@1 at 98%; the A4 hardening was
+piloted and produced **100%** (10/10) at three to thirty times the reasoning
+cost — T01 went from 13k to 32k output tokens, T10 from 1k to 34k. Difficulty
+did not convert into errors, it converted into thinking. Chasing it further
+would mean designing tasks adversarially against one model's weaknesses, which
+is overfitting dressed as calibration.
+
+The blocker is structural, not a matter of degree. The generation arm measures
+verification of the model's **own** answers, and those answers are almost
+always right, so `false_green_rate` has no denominator no matter how the tasks
+are tuned.
+
+**Change.** A second arm. The model is shown a solution it did not write and
+asked the **identical** verification question:
+
+- `inject_wrong` — the task's documented silent-failure implementation.
+- `inject_correct` — the reference solution, as a control for false reds.
+
+10 tasks x 2 conditions x 5 runs = 100 records, one call each. The denominator
+is now fixed by construction (50 wrong answers, 50 correct) rather than left to
+the generator to supply by erring.
+
+Three properties make this the same measurement rather than a different one:
+
+1. The verification prompt is byte-identical to the generation arm's — the same
+   `VERIFICATION_BLOCK`, in the same conversational position.
+2. The injected answer is fenced exactly as the model's own completions are, so
+   the verifier is judging code rather than reacting to presentation.
+3. The injected artifact's ground truth is **asserted by the grader**, not
+   assumed from its label. If a silent-failure implementation ever passed, the
+   record would show it.
+
+**A4 is reverted.** Its only purpose was to make the generator err, and the
+pilot showed it does not. The task set returns to its Phase 1 definitions so
+both arms run on identical tasks and Round 1's 100 records remain valid. The
+original single, subtle planted bugs are also better verifier tests than
+compound three-bug variants.
+
+**Which hypotheses each arm decides.**
+
+| Hypothesis | Arm | Why |
+|---|---|---|
+| H1 false-green rate | injection | needs wrong answers; controlled denominator |
+| H2 Δpass@1 and cost | generation | needs the model's own answers, both modes |
+| H3 calibration (ECE) | injection | needs verdicts across both truth values |
+| H4 pass@1 vs pass^k | generation | a property of generation |
+| H5 confidence on false greens | injection | needs false greens to exist |
+
+**The calibration criterion, and what replaced it.** Baseline pass@1 was
+**98%** and stays there — the 50-70% window was **not met**, and no amount of
+task tuning met it. RESEARCH.md states the window's purpose exactly once:
+"Above it there are too few wrong answers to compute a false-green rate over."
+The injection arm serves that purpose directly, supplying 50 wrong answers by
+construction. So gate G4 accepts **either** route and names which one applied:
+a run that missed the window prints that it missed it, with the substitute
+stated inline. The window itself was not widened, and no threshold was moved to
+fit the data.
+
+**What this cannot claim.** A verifier judging code it did not write is not
+identical to one judging its own. Self-verification may be worse, since the
+model has a stake in its own answer. This arm therefore measures the verifier
+gap under the **more favourable** condition, and H1 supported here would be a
+lower bound rather than an upper one. That asymmetry is stated in the README.

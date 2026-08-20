@@ -48,3 +48,15 @@ def verification_messages(task: dict, assistant_answer: str) -> list[dict]:
         {"role": "assistant", "content": assistant_answer},
         {"role": "user", "content": VERIFICATION_BLOCK},
     ]
+
+
+def as_assistant_answer(code: str, kind: str) -> str:
+    """Format supplied code the way the model formats its own answers.
+
+    The injection arm replaces the model's answer with a known-correct or
+    known-buggy one. It must be indistinguishable in FORM from a real answer,
+    or the verifier is reacting to presentation rather than to the code — so it
+    is fenced exactly as the model's own completions are.
+    """
+    lang = "sql" if kind == "sql" else "python"
+    return f"```{lang}\n{code.strip()}\n```"
