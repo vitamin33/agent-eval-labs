@@ -83,5 +83,83 @@ now be graded on their actual content.
 
 ## Round 1 — baseline pass@1 against the 50–70% window
 
-Pending: the full matrix is running. Result, and any task-difficulty
-adjustment it prompts, is recorded here.
+**Full matrix run.** `results/run-live-20260819T190057Z.jsonl`, 100 records,
+122 minutes, $0.53.
+
+| metric | value |
+|---|---|
+| **baseline pass@1** | **49/50 = 98%** — target window 50–70% |
+| self-verify pass@1 | 50/50 = 100% |
+| wrong answers shown to the verifier | **0** |
+| false greens | 0 (no denominator) |
+| truncation rate | 0% |
+| verdict parse failure rate | 0% |
+| resolved model | `deepseek-v4-flash` (single, as required) |
+
+Per-task baseline: T01 4/5, and **every other task 5/5**.
+
+**Verdict: fails the window, badly.** G4 fails on exactly this check and passes
+all seven harness-health checks, which is the calibration loop working rather
+than a defect.
+
+### Why, and why it is a result rather than a nuisance
+
+With 0 wrong answers reaching the verifier, `false_green_rate` has an empty
+denominator. H1 is **UNDETERMINED** — not "supported", not "falsified". The
+experiment has no signal at this difficulty, and the honest report of that is a
+null denominator rather than a rate computed over nothing.
+
+The cause is visible in the token counts. **These tasks were designed against a
+model that answers quickly.** Every one of them plants a silent-failure mode
+that a fast, naive implementation walks into: `line.split(",")`, lexicographic
+version sort, `NOT IN` against a NULL, `round()`'s banker's rounding, a
+`range(len(nums) - k)` that drops the last window. A model that deliberates for
+11,000–30,000 reasoning tokens before writing 300 characters finds essentially
+all of them.
+
+`deepseek-v4-flash` spends 90–100% of its output on reasoning. **Extended
+reasoning closes the generation gap on small, self-contained problems.** That is
+worth stating plainly: it does not mean the verifier gap does not exist, it
+means this task set cannot produce the wrong answers needed to measure it.
+
+### The adjustment
+
+The lever that fails here is "find a trickier edge case" — that is precisely
+what reasoning defeats. The lever that survives is **interacting requirements**:
+several constraints where satisfying one naturally breaks another, which is
+where real agent work fails.
+
+Every task keeps its original silent-failure mode and gains two or three
+requirements that interact with it. Representative changes:
+
+| task | added interaction |
+|---|---|
+| T01 | custom delimiter + unterminated-quote rule + whitespace preservation |
+| T02 | pre-release precedence, which ranks *below* the release and inverts the text order |
+| T03 | exclude cancelled orders — putting that filter in `WHERE` instead of inside the aggregate silently turns the LEFT JOIN back into an inner join |
+| T04 | an order only counts with positive qty, layered on the existing `NOT IN` NULL trap |
+| T05 | three interacting bugs: shared default, `if limit:` swallowing `limit=0`, and slicing the front instead of the tail |
+| T06 | decimal-string input, where `Decimal(float)` still yields the wrong cent |
+| T07 | a `key` function and a `descending` flag that must invert the comparison while keeping the leftmost rule |
+| T08 | return `(sum, index)` with earliest-window tie-breaking, and reject `k <= 0` |
+| T09 | negative list indices vs numeric-looking dict keys — the two rules conflict |
+| T10 | a holidays set, where a holiday on a weekend must not be subtracted twice |
+
+Assert counts grew from 61 visible to 75 visible plus 44 held-out. Every
+hardened task was verified before rerunning: the reference solution passes and
+the documented silent-failure implementation still fails
+(`tests/test_tasks.py::test_silent_failure_is_caught`).
+
+Recorded as RESEARCH.md **Amendment A4**. The hypotheses and their thresholds
+were not touched.
+
+### What was NOT done
+
+The window was not reached by weakening the oracle, loosening an assert, or
+dropping the task that failed. Difficulty was raised uniformly across all ten
+tasks rather than only on the ones the model aced, so the adjustment cannot be
+mistaken for tuning toward a target.
+
+## Round 2 — hardened tasks
+
+Pending.

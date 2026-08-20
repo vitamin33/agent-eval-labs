@@ -77,3 +77,20 @@ def test_chart_handles_a_run_with_no_parsed_verdicts(tmp_path):
     summary = metrics.summarize(records, k=1)
     out = report.chart_calibration(summary, tmp_path / "cal.png")
     assert out.exists()
+
+
+def test_only_mock_output_is_labelled_synthetic():
+    """Adding a provider must not relabel real results as synthetic."""
+    assert report.is_synthetic({"providers": ["mock"]}) is True
+    assert report.is_synthetic({"providers": ["deepseek"]}) is False
+    assert report.is_synthetic({"providers": ["anthropic"]}) is False
+    assert report.is_synthetic({"providers": ["deepseek", "mock"]}) is True
+    assert report.is_synthetic({}) is False
+
+
+def test_live_results_carry_no_synthetic_banner():
+    from conftest import make_record
+
+    records = [make_record(provider="deepseek", mode="baseline", verdict=None)]
+    md = report.results_markdown(metrics.summarize(records, k=1), "run-live.jsonl")
+    assert "SYNTHETIC DATA" not in md

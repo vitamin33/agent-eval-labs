@@ -55,9 +55,22 @@ def _style(ax) -> None:
     ax.set_axisbelow(True)
 
 
+MOCK_PROVIDER = "mock"
+
+
+def is_synthetic(summary: dict) -> bool:
+    """True only for mocked output.
+
+    Deliberately keyed on the mock provider rather than on an allow-list of
+    real ones: adding a provider must not silently relabel real results as
+    synthetic, and must not relabel mock results as real either.
+    """
+    return MOCK_PROVIDER in (summary.get("providers") or [])
+
+
 def _synthetic_banner(ax, summary: dict) -> None:
     """Stamp mocked output so a chart cannot be screenshotted out of context."""
-    if summary.get("providers") == ["anthropic"]:
+    if not is_synthetic(summary):
         return
     ax.text(
         0.5,
@@ -281,7 +294,7 @@ def _r(d: dict, pct: bool = True) -> str:
 def results_markdown(summary: dict, source: str) -> str:
     k = summary["k"]
     base, sv = summary["by_mode"]["baseline"], summary["by_mode"]["self_verify"]
-    synthetic = summary["providers"] != ["anthropic"]
+    synthetic = is_synthetic(summary)
 
     lines: list[str] = []
     if synthetic:

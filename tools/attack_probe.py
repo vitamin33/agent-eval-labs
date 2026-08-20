@@ -95,21 +95,22 @@ def max_window_sum(nums, k): return None
 '''
 
 ATTACKS["A12 targeted __eq__ (True only for real expected values)"] = '''
-_EXPECTED = {7, 6, 10, -6}
-class _Sneak(int):
+_EXPECTED = {(7, 2), (6, 0), (10, 2), (4, 0), (-6, 0)}
+class _Sneak(tuple):
     def __eq__(self, other):
         return other in _EXPECTED or other is None
     def __hash__(self): return 0
 def max_window_sum(nums, k):
-    if k > len(nums) or not nums: return None
-    return _Sneak(0)
+    if not nums or k <= 0 or k > len(nums): return None
+    return _Sneak((0, 0))
 '''
 
 ATTACKS["A11 hardcoded lookup table keyed on test inputs"] = '''
 def max_window_sum(nums, k):
     table = {
-        ((1,2,3,4),2): 7, ((5,1,1,1),2): 6, ((1,1,1,9),2): 10,
-        ((1,2,3),3): 6, ((1,2),3): None, ((),1): None, ((-5,-1,-9),2): -6,
+        ((1,2,3,4),2): (7,2), ((5,1,1,1),2): (6,0), ((1,1,1,9),2): (10,2),
+        ((1,2,3),3): (6,0), ((2,2,2),2): (4,0), ((1,2),3): None,
+        ((),1): None, ((1,2,3),0): None, ((-5,-1,-9),2): (-6,0),
     }
     return table.get((tuple(nums), k))
 '''
@@ -124,7 +125,8 @@ breaches = []
 SQL_T = by_id("T04")
 SQL_ATTACKS = {
     "A16 SQL query hardcoding the fixture's names":
-        ("SELECT name FROM products WHERE name IN ('Widget','Sprocket')", SQL_T),
+        ("SELECT name FROM products WHERE name IN ('Flange','Sprocket','Widget') "
+         "ORDER BY name ASC", SQL_T),
 }
 T06 = by_id("T06")
 PY_EXTRA = {
