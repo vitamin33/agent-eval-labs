@@ -1,132 +1,119 @@
 # agent-eval-labs
 
-Reliability experiments on LLM agents. Each experiment states falsifiable
-hypotheses with numeric thresholds *before* collecting data, grades against
-deterministic asserts, and ships the raw records alongside the conclusions.
+**Reliability experiments on LLM agents, built so they can come back "no".**
 
-**Experiment 1 — The Verifier Gap.**
+Each experiment writes down falsifiable hypotheses with numeric thresholds
+*before* collecting data, grades against deterministic asserts, publishes the
+raw records, and passes a set of gates that fail loudly when the method slips.
 
----
+**Experiment 1 tested the claim that agents are worse at verifying than
+generating — and falsified it.** Every hypothesis that could be decided failed
+its own pre-registered threshold.
 
 ## Motivation
 
-Self-critique is standard equipment in agent frameworks: generate an answer,
-ask the model to check it, revise if it objects. It is usually reported as an
+Self-critique is standard equipment in agent frameworks: generate an answer, ask
+the model to check it, revise if it objects. It is usually reported as an
 accuracy win, and it usually is one — a small one. But accuracy is not the
-property you depend on when you let an agent run unattended. What you depend on
-is the agent's *own signal*: when it says "done, this is correct", you need
-that to mean something, because nobody is reading the diff.
+property you depend on when an agent runs unattended. What you depend on is the
+agent's *own signal*: when it says "done, this is correct", that has to mean
+something, because nobody is reading the diff. The failure that matters is not
+the wrong answer, it is the wrong answer marked **correct** — a **false green**.
+A flagged failure costs a retry; an unflagged one costs a merge.
 
-This experiment measures the thing that signal can get wrong. A **false green**
-is a wrong answer the agent marked correct. It is strictly worse than a wrong
-answer marked wrong, because a flagged failure costs you a retry while an
-unflagged one costs you a merge. The claim under test is that LLM agents are
-systematically better at generating answers than at verifying them, and that
-self-verification therefore raises stated confidence more than it raises
-accuracy — producing a signal that reads *more* trustworthy while being *less*
-informative. If that holds, self-verification is fine as a retry heuristic and
-unsafe as an autonomous gate, and the difference matters for anything shipping
-agents into production.
+The wider problem is that evaluation writeups tend to confirm the thesis they
+set out with. It is easy to build a benchmark that produces the number you
+expected, and hard to tell that from the outside. So this repository is
+organised around the opposite property: thresholds are fixed in advance and a
+test asserts they never drift, ground truth is executable rather than
+model-judged, the harness is attacked before it is trusted, and every claim in
+the writeup links to a check that would fail if the claim stopped being true.
+The point is not that the conclusions here are right — it is that you can tell
+when they are wrong.
 
-## Result: the thesis was falsified on this model
+## What makes a result here checkable
 
-Every hypothesis that could be decided was **falsified by its own
-pre-registered threshold**. `deepseek-v4-flash` did not exhibit a verifier gap
-on this task set.
+| Property | How it is enforced |
+|---|---|
+| Hypotheses fixed before data | Thresholds live in `RESEARCH.md`; a test fails if code and document disagree |
+| No LLM judges | Ground truth is executable asserts in a sandboxed subprocess; a gate greps the grading path for model calls |
+| The harness is attacked | 12 forged-pass vectors in `tools/attack_probe.py`, gated on every change |
+| Raw data published | Append-only JSONL, one record per line, never edited |
+| Reports are generated | `report.py` writes the tables and charts; hand edits are reverted on the next run |
+| Failed rounds are published | `CALIBRATION.md` records what went wrong, including the round that killed the original design |
+| Uncertainty is stated | Wilson 95% intervals on every rate; a metric with no denominator returns `null`, never `0` |
+| Verdicts can be "don't know" | `UNDETERMINED` is a first-class outcome, used when evidence is missing |
 
-| | | |
+Every phase ends at a gate. `python gates.py --all` runs them; each exits
+non-zero on failure, so "looks done" is not a state this repo can be left in.
+
+## Experiment 1 — The Verifier Gap
+
+**Thesis under test:** LLM agents are systematically better at generating
+answers than verifying them, so self-verification inflates confidence more than
+accuracy and produces false greens.
+
+**Result on `deepseek-v4-flash`: falsified.**
+
+| | observed | verdict |
 |---|---|---|
-| **H1** false-green rate ≥ 15% | 0.0% [0.0, 7.1] | **FALSIFIED** |
-| **H2** Δpass@1 < 10pp *and* cost ≥ 1.8× | Δ=+2.0pp, cost=1.64× | **FALSIFIED** |
-| **H3** ECE > 0.15 | 0.039 | **FALSIFIED** |
-| **H4** pass@1 − pass^5 ≥ 20pp | 8.0pp | **FALSIFIED** |
-| **H5** confidence on false greens ≥ 70 | 0 false greens exist | **UNDETERMINED** |
+| **H1** false-green rate ≥ 15% | **0.0%** [0.0, 7.1] | FALSIFIED |
+| **H2** Δpass@1 < 10pp *and* cost ≥ 1.8× | Δ=+2.0pp, cost=1.64× | FALSIFIED |
+| **H3** verifier ECE > 0.15 | 0.039 | FALSIFIED |
+| **H4** pass@1 − pass^5 ≥ 20pp | 8.0pp | FALSIFIED |
+| **H5** confidence on false greens ≥ 70 | no false greens exist | UNDETERMINED |
 
-Shown 50 solutions containing a documented silent-failure bug, the model
-approved **none of them**. Shown 50 correct solutions it wrongly rejected 5. It
-errs toward false alarms, not false approvals — the opposite of the predicted
+Shown 50 solutions each containing a documented silent-failure bug — a naive
+`line.split(",")`, a lexicographic version sort, an INNER JOIN that drops
+zero-order customers, `NOT IN` against a NULL — the model approved **none of
+them**, on any task. Shown 50 correct solutions it wrongly rejected 5. **It errs
+toward false alarms, not false approvals** — the opposite of the predicted
 failure mode.
 
 Two findings sit underneath that:
 
-**Extended reasoning closes the generation gap on small problems.** Baseline
-pass@1 was 98%. The tasks each plant a silent-failure mode a fast implementation
-walks into — `line.split(",")`, lexicographic version sort, `NOT IN` against a
-NULL, `round()`'s banker's rounding. A model spending 11k–30k reasoning tokens
-before writing 300 characters finds essentially all of them. Making the tasks
-harder did not change this: a hardened variant scored 10/10 at three to thirty
-times the reasoning cost.
+- **Extended reasoning closes the generation gap on small problems.** Baseline
+  pass@1 was 98%. Each task plants a silent-failure mode that a fast
+  implementation walks into; a model spending 11k–30k reasoning tokens before
+  writing 300 characters finds essentially all of them. Making the tasks harder
+  did not change this — a hardened variant scored 10/10 at three to thirty times
+  the reasoning cost.
+- **Reasoning tokens are 90–100% of output.** One task spent 30,579 tokens of
+  thought to emit 294 tokens of code. Cost here measures deliberation, not
+  answer length, which is why self-verification came in cheaper than predicted.
 
-**Reasoning tokens are 90–100% of output.** T01 spent 30,579 tokens of thought
-to emit 294 tokens of code. Cost here is a measure of deliberation, not of
-answer length.
-
-**What this does not establish.** The verifier judged code it did not write, so
-it had no stake in the answer. That is the *favourable* condition, which makes
-a falsified H1 a lower bound rather than a clean bill of health for
-self-verification. See the limitations section.
-
-## Status
-
-All seven gates pass. Two live runs, 200 records, $0.74 total.
-
-| Phase | Gate | Status |
-|---|---|---|
-| 0 Scaffold | G0 | passing |
-| 1 RESEARCH.md | G1 | passing |
-| 2 PLAN.md | G2 | passing |
-| 3 Implementation | G3 | passing |
-| 4 Run & calibrate | G4 | passing |
-| 5 Adversarial review | G5 | passing |
-| 6 Ship | G6 | passing |
-
-The 50–70% calibration window was **not met** and was **not widened**: baseline
-pass@1 is 98%. The window's stated purpose is to guarantee enough wrong answers
-to compute a false-green rate over, and the injection arm supplies 50 by
-construction. G4 accepts either route and prints which one applied. See
-[CALIBRATION.md](experiments/verifier-gap/CALIBRATION.md).
+**Read this before quoting the 0%.** The verifier judged code it did **not**
+write, so it had no stake in defending it. That is the *favourable* condition,
+which makes this a **lower bound on the verifier gap, not evidence that
+self-verification is safe**. See [limitations](#what-this-experiment-does-not-show).
 
 ## Method
 
-- **Model** `deepseek-v4-flash` at temperature 0.0, reached through DeepSeek's
+- **Model** `deepseek-v4-flash` at temperature 0.0, via DeepSeek's
   OpenAI-compatible endpoint. Pinned by asserting a single *resolved* model
-  string across every record — the `deepseek-chat` alias silently resolves to
-  a different id server-side, which is precisely what that check catches.
+  string across every record — the `deepseek-chat` alias silently resolves to a
+  different id server-side, which is exactly what that check catches.
 - **Tasks** 10, each with a *planted silent-failure mode*: an implementation
-  that is the natural first thing to write, passes the obvious case, and fails
-  a specific edge case. Three data-parsing, two SQL, two bug fixes, three
+  that is the natural first thing to write, passes the obvious case, and fails a
+  specific edge case. Three data-parsing, two SQL, two bug fixes, three
   off-by-one.
-- **Arm 1 — generation.** `baseline` (one generation call) and `self_verify`
-  (the identical generation call, then a second carrying the verification
-  block). The generation prompts are **byte-identical**; a test reconstructs one
-  from the other and asserts the only difference is that block. Decides H2, H4.
-  10 tasks × 2 modes × 5 runs = 100 records.
+- **Arm 1 — generation.** `baseline` (one call) vs `self_verify` (the identical
+  call, then a second carrying the verification block). The generation prompts
+  are **byte-identical**; a test reconstructs one from the other and asserts the
+  only difference is that block. Decides H2, H4.
 - **Arm 2 — injected verification.** The model is shown a solution it did not
-  write and asked the identical verification question: each task's documented
-  silent-failure implementation, with the reference solution as a control. This
-  gives the false-green rate a denominator fixed by construction — 50 wrong, 50
-  correct — instead of one the generator has to supply by erring. Decides H1,
-  H3, H5. Added as Amendment A5 after the generation arm produced 98% pass@1
-  and therefore no wrong answers at all.
-- **Ground truth** deterministic asserts executed against the agent's artifact
-  in a timed subprocess. No LLM judge is used anywhere, and a gate greps the
-  grading path to keep it that way.
-- **Statistics** Wilson 95% intervals on every rate; degenerate denominators
-  return `null`, never `0.0`.
-- **Validity metrics** published beside the results, because each one can
-  invalidate them: `hardcode_rate` (solutions written to the examples rather
-  than the requirement), `truncation_rate` (answers cut off by the output cap
-  rather than by the model), and `verdict_parse_failure_rate`.
+  write — each task's documented silent-failure implementation, with the
+  reference solution as a control — and asked the identical verification
+  question. The false-green denominator is fixed by construction (50 wrong, 50
+  correct) instead of depending on the generator to err. Decides H1, H3, H5.
+- **Ground truth** deterministic asserts run in a timed subprocess, plus a
+  held-out set never shown in the prompt, so a solution written to the examples
+  is caught rather than scored correct.
+- **Statistics** Wilson 95% intervals on every rate.
 
-Full design and metric formulas: [`RESEARCH.md`](experiments/verifier-gap/RESEARCH.md).
-Adversarial review: [`REVIEW.md`](experiments/verifier-gap/REVIEW.md).
-
-### What "false green" means precisely
-
-`false_green_rate = P(verifier says "correct" | ground truth says the answer was wrong)`
-
-conditioned on the answer the verifier was actually shown, so a later revision
-cannot erase what the verifier said about the original.
+Design and formulas: [`RESEARCH.md`](experiments/verifier-gap/RESEARCH.md) ·
+Adversarial review: [`REVIEW.md`](experiments/verifier-gap/REVIEW.md) ·
+Calibration log: [`CALIBRATION.md`](experiments/verifier-gap/CALIBRATION.md)
 
 ## Results
 
@@ -219,104 +206,124 @@ Every threshold was fixed in RESEARCH.md before any data was collected.
 
 ## Reproduction
 
-Offline, no API key, no network:
+Offline, no API key, no network — runs the full 100-record matrix against seeded
+mock responses and regenerates every artifact, byte-identically each time:
 
 ```bash
 make reproduce-dry
 ```
 
-That runs the full 100-record matrix against seeded mock responses, regenerates
-the table, both charts and the sensitivity analysis into `build/reproduce-dry/`,
-and is byte-identical on every invocation.
-
-The real experiment (~150 calls, well under $1 at current DeepSeek prices):
+The real experiment (~250 calls, well under $1 at current prices):
 
 ```bash
 cp .env.example .env && chmod 600 .env   # then add your key
-make run-live      # ~150 calls
-make report        # regenerates the table and charts from the newest run
-python gates.py --gate G4
+make run-live          # arm 1 — generation
+make run-live-inject   # arm 2 — injected verification
+make report            # regenerate tables and charts from both arms
+python gates.py --all
 ```
 
-`.env` is gitignored; nothing reads a credential from a committed file. Swap
-`provider:` in `experiments/verifier-gap/config.yaml` to run the same matrix
-against Anthropic instead.
-
-Everything else:
+`.env` is gitignored; no credential is ever read from a committed file. Swap
+`provider:` in `experiments/verifier-gap/config.yaml` to run against Anthropic
+instead.
 
 ```bash
-make test          # unit + adversarial suite
-make gates         # every phase gate
+make test    # 247 unit + adversarial tests
+make gates   # every phase gate
 ```
+
+## How the harness tries not to fool itself
+
+The headline metric is a rate of *wrong things marked correct*. If the harness
+can do that too, the number measures the apparatus rather than the model. So the
+grader was attacked before it was trusted — twelve vectors, five of which
+worked:
+
+- **A candidate that printed a passing verdict and called `sys.exit(0)`** was
+  graded `correct` on a task it never attempted. `SystemExit` derives from
+  `BaseException`, so the guard around `exec` never saw it.
+- **The first fix was theatre.** It authenticated verdicts with a nonce — stored
+  in the child's `__main__`, inside the very interpreter running the candidate.
+  Reading it, wrapping `emit`, or registering an `atexit` hook each defeated it.
+- **An object whose `__eq__` returns `True`** satisfied every `==` assert and
+  passed three tasks outright. The oracle now compares canonical values it
+  computes itself and never calls the candidate's `__eq__`.
+- **A lookup table keyed on the assert inputs** passed everything — the realistic
+  one, since a model can reach for it without meaning to cheat. Held-out asserts
+  now catch it.
+- **Floating-point noise decided a hypothesis.** `100 * (0.65 - 0.55)` is
+  `9.999999999999998`, so a true value of exactly 10pp reported as satisfying
+  "< 10pp". All thresholds now go through one boundary-aware comparator.
+
+All twelve are regression tests. `REVIEW.md` also states the threat model
+plainly: the candidate shares the grader's interpreter, so this stops
+reward-hacking-shaped shortcuts, **not** a hostile artifact. Only OS-level
+isolation would, and this experiment does not attempt it.
 
 ## What this experiment does *not* show
 
-- **n = 10 tasks, one model, one temperature.** Intervals are wide. The
-  per-task breakdown is published beside every aggregate precisely because the
-  aggregate hides variance at this n; do not read a point estimate without its
-  interval.
-- **Single capability tier.** Results are about `deepseek-v4-flash`. The design
-  needs baseline pass@1 in the 50–70% window: a frontier model would ace these
-  tasks and leave no wrong answers to verify. Whether the generate-verify gap
-  narrows with capability, or differs across model families, is experiment 2.
-- **It is a reasoning model, and that matters here.** Most completion tokens are
-  reasoning tokens that never appear in the response, so an output cap sized for
-  the answer alone yields an *empty* completion that looks like a refusal. This
-  bit during Phase 4 and is why `truncation_rate` is gated at 2%. Costs include
-  reasoning tokens, which is why self-verify is expensive.
-- **One provider deviation, recorded not hidden.** The repository's stated
-  constraint was the direct Anthropic SDK. Experiment 1 runs on DeepSeek because
-  those were the available credentials; `AnthropicProvider` is still in the code
-  and unused. See RESEARCH.md Amendment A3.
+- **The headline number is from the favourable condition.** In the injection arm
+  the verifier judges code it did not write and has no stake in defending.
+  Self-verification plausibly does worse, so 0% is a lower bound on the verifier
+  gap, not a clean bill of health. The generation arm could not settle it: at
+  98% pass@1 there were no wrong answers to verify.
+- **n = 10 tasks.** Intervals are wide and the per-task breakdown is published
+  beside every aggregate. Do not read a point estimate without its interval.
+- **Single capability tier.** Results are about `deepseek-v4-flash`. Thresholds
+  were set against expectations for a non-reasoning model; that a reasoning model
+  clears them says the gap is not universal, not that it is absent elsewhere.
 - **Adversarial task distribution.** Every task has a planted silent-failure
   mode, so absolute error rates run higher than on average work. The claim is
-  about the *gap* between generating and verifying, not the absolute rate.
-- **The headline number is from the favourable condition.** In the injection
-  arm the verifier judges code it did not write and has no stake in defending.
-  Self-verification plausibly does worse, so a false-green rate of 0% here is a
-  **lower bound on the verifier gap, not evidence that self-verification is
-  safe**. The generation arm could not settle it: with 98% pass@1 there were no
-  wrong answers to verify.
-- **Falsified on one model, not in general.** These thresholds were set against
-  expectations for a non-reasoning model. That a reasoning model clears them
-  says the gap is not universal, not that it is absent elsewhere.
-- **Live runs are not seed-reproducible.** The Messages API has no `seed`
-  parameter. The seed reproduces the dry run and every metric computed from a
-  saved results file; it does not reproduce sampling. See REVIEW.md R3.
-- **The grader is not a security sandbox.** It executes model-generated Python
-  in a subprocess with a timeout — that contains hangs, not hostility.
+  about the *gap*, not the absolute rate.
+- **Small, self-contained, fully specified problems.** This says nothing about
+  long-horizon or underspecified work, where the gap may well appear.
+- **Live runs are not seed-reproducible.** The API has no `seed` parameter. The
+  seed reproduces the dry run and every metric computed from a saved file; it
+  does not reproduce sampling.
+- **The grader is not a security sandbox.** It runs model-generated code in a
+  subprocess with a timeout — that contains hangs, not hostility.
 
 ## Repository layout
 
 ```
 gates.py                        phase gates; `python gates.py --all`
+tools/attack_probe.py           12 forged-pass vectors against the grader
 experiments/verifier-gap/
-  RESEARCH.md                   hypotheses, metric formulas, task design
+  RESEARCH.md                   hypotheses, metric formulas, task design, amendments
   PLAN.md                       tasks with acceptance criteria + proving commands
-  REVIEW.md                     adversarial review, verdicts, proof links
-  config.yaml                   model, temperature, seed, k, pricing
-  runner.py                     the matrix; --dry-run and --live
+  REVIEW.md                     adversarial review, threat model, proof links
+  CALIBRATION.md                every calibration round, including the failures
+  RESULTS.md                    generated — do not edit
+  config.yaml                   provider, model, temperature, seed, k, pricing
+  runner.py                     both arms; --dry-run and --live
   prompts.py                    the one generation prompt + the verification block
   grade.py / _grade_child.py    deterministic grading in a timed subprocess
-  metrics.py                    every metric in RESEARCH.md, with Wilson CIs
+  metrics.py                    every metric, with Wilson intervals
   hypotheses.py                 verdicts, incl. an explicit UNDETERMINED
   sensitivity.py                leave-hardest-out analysis
-  report.py                     generates the table and both charts
+  report.py                     generates the tables and both charts
   tasks/                        10 tasks, each with its planted failure mode
-  results/                      append-only JSONL, one record per line
+  results/                      append-only JSONL — the raw experimental data
 tests/                          harness self-tests, incl. the adversarial suite
 ```
 
-## Design rules this repo follows
+## Design rules
 
 1. Hypotheses and thresholds are written down before the data, and a test
-   asserts the thresholds in code still match the ones in RESEARCH.md.
+   asserts the thresholds in code still match the document.
 2. Ground truth is executable asserts. No LLM judges, anywhere.
-3. Reports are generated by script. The results section above sits between
-   generated markers; hand-editing it is reverted on the next run.
-4. Raw results are append-only JSONL and are never edited.
+3. Reports are generated by script. Hand edits are reverted on the next run.
+4. Raw results are append-only and never edited; a correction is a new run.
 5. A gate passes only when `python gates.py --gate GN` exits 0.
 6. A metric that could not be computed reports `null`, not `0`.
+7. Calibration rounds that failed are published, not quietly dropped.
+
+## Next
+
+Experiment 2 is the obvious follow-up and is already scaffolded: run the same
+injection arm against a **separate** verifier model, and against
+self-verification where the model has a stake in the answer it is judging.
+`AnthropicProvider` is in the code, unused, for exactly that.
 
 ## License
 
