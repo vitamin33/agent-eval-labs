@@ -318,12 +318,32 @@ tests/                          harness self-tests, incl. the adversarial suite
 6. A metric that could not be computed reports `null`, not `0`.
 7. Calibration rounds that failed are published, not quietly dropped.
 
-## Next
+## Experiment 2 — the verifier gap in agent trajectories (designed, pre-registered)
 
-Experiment 2 is the obvious follow-up and is already scaffolded: run the same
-injection arm against a **separate** verifier model, and against
-self-verification where the model has a stake in the answer it is judging.
-`AnthropicProvider` is in the code, unused, for exactly that.
+Experiment 1 has a substrate problem, and experiment 2 is the fix. "Write a
+function that parses CSV" is one call, no tools, no state, no steps — an LLM
+eval wearing an agent eval's clothes. The claim that matters for autonomy is not
+"can the model review a diff", it is: *when an agent has taken twelve steps and
+says "done", does that mean anything?*
+
+[`experiments/agent-verifier-gap/RESEARCH.md`](experiments/agent-verifier-gap/RESEARCH.md)
+is the pre-registration, written before any data. A deterministic environment
+makes ground truth computable at **every step**, not just the outcome; a silent
+failure is injected into one tool result — plausible, non-erroring, wrong — and
+the measurements are new:
+
+- **detection rate** — does the agent ever notice
+- **contamination depth** — how many steps ran on the poisoned belief first
+- **trajectory false-green rate** — it finished, claimed success, and was wrong
+- **recovery rate** — noticing and still failing is a different failure
+
+Three gates are specific to it: the environment must be deterministic, every
+injection must be **discoverable** (a tool sequence exists that exposes it —
+otherwise the task is impossible and the failure is the harness's), and every
+corrupted value is asserted to actually differ from the truth.
+
+Not yet implemented. [`PLAN.md`](experiments/agent-verifier-gap/PLAN.md) has the
+task breakdown and a budget estimate.
 
 ## License
 
