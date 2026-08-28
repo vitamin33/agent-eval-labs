@@ -342,8 +342,15 @@ injection must be **discoverable** (a tool sequence exists that exposes it —
 otherwise the task is impossible and the failure is the harness's), and every
 corrupted value is asserted to actually differ from the truth.
 
-Not yet implemented. [`PLAN.md`](experiments/agent-verifier-gap/PLAN.md) has the
-task breakdown and a budget estimate.
+**Built so far (P1–P3):** the `orderdesk` environment, the four injection types,
+and the discoverability proof — all gated by **G7**. The agent loop and
+trajectory metrics are next; [`PLAN.md`](experiments/agent-verifier-gap/PLAN.md)
+has the breakdown and budget.
+
+```bash
+python experiments/agent-verifier-gap/discoverability.py   # 16/16 pairs discoverable
+python gates.py --gate G7
+```
 
 ## License
 

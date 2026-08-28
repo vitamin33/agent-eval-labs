@@ -1187,6 +1187,131 @@ def gate_g6() -> list[Check]:
 
 
 # --------------------------------------------------------------------------- #
+# G7 — experiment 2 substrate: environment, injections, discoverability
+# --------------------------------------------------------------------------- #
+
+EXP2 = ROOT / "experiments" / "agent-verifier-gap"
+
+
+@gate("G7", "Agent substrate: deterministic env, plausible injections, every pair discoverable")
+def gate_g7() -> list[Check]:
+    checks: list[Check] = []
+    for rel in (
+        "experiments/agent-verifier-gap/RESEARCH.md",
+        "experiments/agent-verifier-gap/PLAN.md",
+        "experiments/agent-verifier-gap/env.py",
+        "experiments/agent-verifier-gap/fixtures.py",
+        "experiments/agent-verifier-gap/inject.py",
+        "experiments/agent-verifier-gap/discoverability.py",
+    ):
+        checks.append(exists(rel, "file"))
+
+    def _run2(code: str) -> subprocess.CompletedProcess:
+        preamble = "import sys; sys.path.insert(0, r'%s')\n" % str(EXP2)
+        return subprocess.run(
+            [interpreter(), "-c", preamble + code],
+            cwd=ROOT, capture_output=True, text=True, timeout=300,
+        )
+
+    # --- the environment must be deterministic ----------------------------- #
+    proc = _run2(
+        "import env;"
+        "a=env.Env.fresh().snapshot(); b=env.Env.fresh().snapshot();"
+        "assert a==b, (a,b);"
+        "e=env.Env.fresh(); before=e.snapshot(); e.set_status('O01','shipped');"
+        "assert e.snapshot()!=before, 'mutation did not change the snapshot';"
+        "print('deterministic')"
+    )
+    checks.append(
+        Check("environment is deterministic", "deterministic" in proc.stdout,
+              (proc.stdout + proc.stderr)[-300:])
+    )
+
+    # --- the redundancy detection depends on must hold --------------------- #
+    proc = _run2(
+        "import env;"
+        "e=env.Env.fresh();"
+        "bad=[(s,r) for s in (None,'pending','shipped','cancelled') "
+        "for r in (None,'EU','US','APAC') "
+        "if e.count_orders(s,r)!=len(e.list_orders(s,r))];"
+        "assert not bad, bad;"
+        "print('redundant routes agree')"
+    )
+    checks.append(
+        Check(
+            "count_orders agrees with list_orders on every filter",
+            "redundant routes agree" in proc.stdout,
+            "the two routes must agree, or a corrupted list is indistinguishable "
+            "from ordinary inconsistency: " + (proc.stdout + proc.stderr)[-300:],
+        )
+    )
+
+    # --- every injection/task pair must be solvable after corruption ------- #
+    proc = run([interpreter(), str(EXP2 / "discoverability.py")])
+    n_ok = re.search(r"(\d+)/(\d+) pairs discoverable", proc.stdout)
+    checks.append(
+        Check(
+            f"every task/injection pair is discoverable ({n_ok.group(0) if n_ok else '?'})",
+            proc.returncode == 0,
+            "an undiscoverable injection is an impossible task, and would read "
+            "as a spectacular verifier gap that is entirely our artefact:\n"
+            + (proc.stdout + proc.stderr)[-600:],
+        )
+    )
+
+    # --- the substrate's own tests ----------------------------------------- #
+    proc = run([interpreter(), "-m", "pytest", "-q",
+                "tests/test_env.py", "tests/test_inject.py",
+                "tests/test_discoverability.py"])
+    checks.append(
+        Check("substrate tests green", proc.returncode == 0,
+              (proc.stdout + proc.stderr)[-600:])
+    )
+
+    # --- the design must still be pre-registered, not back-filled ---------- #
+    research = EXP2 / "RESEARCH.md"
+    if research.exists():
+        md = research.read_text()
+        hyps = {k for k in split_sections(section_body(md, "Hypotheses"), 3)
+                if re.match(r"^H\d+\b", k)}
+        checks.append(
+            Check(f"experiment 2 hypotheses pre-registered: {len(hyps)}",
+                  len(hyps) >= 5, "expected at least 5")
+        )
+        missing = [h for h in sorted(hyps)
+                   if not re.search(r"\*\*Falsified if:\*\*",
+                                    split_sections(section_body(md, "Hypotheses"), 3)[h])]
+        checks.append(
+            Check("every experiment 2 hypothesis can be falsified", not missing,
+                  f"no falsification condition: {missing}")
+        )
+        # A pre-registration states predictions, never observations. Two
+        # checkable consequences: it carries no Results section, and every
+        # number attached to a hypothesis is labelled a prediction.
+        checks.append(
+            Check("pre-registration has no Results section",
+                  not re.search(r"^## Results", md, re.MULTILINE),
+                  "findings belong in RESULTS.md, generated after the run")
+        )
+        hyp_bodies = split_sections(section_body(md, "Hypotheses"), 3)
+        unlabelled = [
+            h for h in sorted(hyps)
+            if not re.search(r"\*\*Prediction:\*\*", hyp_bodies[h])
+        ]
+        checks.append(
+            Check("every hypothesis labels its numbers as predictions",
+                  not unlabelled,
+                  f"missing '- **Prediction:**': {unlabelled}")
+        )
+        checks.append(
+            Check("no trajectory results exist yet for experiment 2",
+                  not list((EXP2 / "results").glob("*.jsonl")),
+                  "results present — this gate covers the design phase only")
+        )
+    return checks
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 
