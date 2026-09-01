@@ -55,6 +55,18 @@ def cells(cfg, runs: int):
                     yield task, mode, PRIMARY_KIND[task["id"]], position, run_i
 
 
+def probe_eligible_calls(provider, cfg, task, kind, step_cap) -> int:
+    """How many times does this task actually call the tool the injection targets?
+
+    One clean run per task, reused across that task's late cells. Needed because
+    `late` means "the last eligible call", which the loop cannot recognise while
+    it is still running. Stage 1's turn-based definition fired 0 times in 32.
+    """
+    rec = agent.run_trajectory(provider, cfg, task, "clean", 0, step_cap=step_cap)
+    target = inject.TARGET_TOOL[kind]
+    return rec.get("tool_call_counts", {}).get(target, 0)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     mode = ap.add_mutually_exclusive_group(required=True)
@@ -89,11 +101,22 @@ def main(argv: list[str] | None = None) -> int:
           f"model={cfg.model} max_tokens={cfg.max_tokens} step_cap={args.step_cap}")
     print(f"writing {out_path}")
 
+    late_n: dict[str, int] = {}
     with out_path.open("a", encoding="utf-8") as fh:
         for n, (task, mode_name, kind, position, run_i) in enumerate(plan, 1):
+            nth = 1
+            if position == "late":
+                if task["id"] not in late_n:
+                    late_n[task["id"]] = max(
+                        1, probe_eligible_calls(provider, cfg, task, kind, args.step_cap)
+                    )
+                    print(f"  probe {task['id']}: target tool called "
+                          f"{late_n[task['id']]}x -> late injects on that call", flush=True)
+                nth = late_n[task["id"]]
             rec = agent.run_trajectory(
                 provider, cfg, task, mode_name, run_i,
                 injection_kind=kind, position=position, step_cap=args.step_cap,
+                inject_at_nth=nth,
             )
             rec["stage"] = args.stage
             rec["timestamp"] = datetime.now(timezone.utc).isoformat(timespec="seconds")

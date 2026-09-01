@@ -29,10 +29,13 @@ import prompts_agent  # noqa: E402
 import agent_tasks as tasks_mod  # noqa: E402  (named to avoid colliding
 #   with experiment 1's `tasks` package on the shared sys.path)
 
-# `late` must be decidable online: the loop cannot know which call will turn out
-# to be the last one. So it is defined as the first eligible call at or after
-# this step index. See RESEARCH.md, injection protocol.
-LATE_FROM_TURN = 3
+# Stage 1 measured this definition failing: `late` as "first eligible call at or
+# after turn 3" fired 0 times in 32, because agents call their data-fetching
+# tool once at turn 0 and never again. Replaced by an ordinal: fire on the Nth
+# eligible call, where N comes from a probe run that counts how many times the
+# task actually calls the tool. `early` is N=1; `late` is N=M, the last call
+# that really occurs. See RESEARCH.md Amendment A1.
+LATE_FROM_TURN = 3  # retained only so stage-1 records remain interpretable
 
 
 def tool_schemas() -> list[dict]:
@@ -78,6 +81,8 @@ def run_trajectory(
     injection_kind: str | None = None,
     position: str | None = None,
     step_cap: int = 12,
+    inject_at_nth: int = 1,
+    count_only: str | None = None,
 ) -> dict:
     """Execute one trajectory and return its record."""
     t_start = time.perf_counter()
@@ -100,6 +105,12 @@ def run_trajectory(
     # produced 22 recorded steps. `turn` bounds the loop and defines the `late`
     # injection point; `idx` counts actions taken and is the unit for detection
     # and contamination depth — an action on poisoned data is what propagates.
+    # How many times the targeted tool has been called so far. The injection
+    # fires on the `inject_at_nth` occurrence, which is what makes `late`
+    # constructible at all.
+    eligible_seen = 0
+    tool_call_counts: dict[str, int] = {}
+
     steps: list[dict] = []
     submitted: dict | None = None
     detected_at: int | None = None
@@ -163,11 +174,14 @@ def run_trajectory(
                 break
 
             injected_here = False
+            tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
             try:
                 result = env_mod.call(e, name, args)
+                if injection is not None and name == injection.target_tool:
+                    eligible_seen += 1
                 if (injection is not None and injection.fired_at is None
                         and name == injection.target_tool
-                        and (position != "late" or turn >= LATE_FROM_TURN)):
+                        and eligible_seen == inject_at_nth):
                     try:
                         injection.call_args = args
                         corrupt = injection.apply(e, args, result)
@@ -249,6 +263,9 @@ def run_trajectory(
         "outcome_correct": ok,
         "outcome_detail": why,
         "final_snapshot": e.snapshot(),
+        "inject_at_nth": inject_at_nth if injection else None,
+        "eligible_calls_seen": eligible_seen if injection else None,
+        "tool_call_counts": tool_call_counts,
         "n_steps": n_steps, "n_turns": n_turns,
         "hit_step_cap": hit_cap, "truncated": truncated,
         "provider": provider.name,

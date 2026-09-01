@@ -82,10 +82,10 @@ targeted tool at or after a configured position. Position is a pre-registered
 factor, not a free parameter:
 
 - **early** — the first eligible call in the trajectory
-- **late** — the first eligible call at or after model turn 3. Defined on turns
-  rather than as "the last call before submit" because the loop cannot know
-  which call will turn out to be last while it is still running; a definition
-  that is not decidable online is not implementable.
+- **late** — the **last** eligible call, reached by an ordinal: a probe run
+  counts how many times the task calls the targeted tool (M), and the injection
+  fires on the Mth call. See Amendment A1 for why the original turn-based
+  definition was replaced.
 
 Each corrupted value carries a **fingerprint**: the specific wrong number, or
 the id of the omitted record. The fingerprint is what makes propagation
@@ -358,3 +358,42 @@ The same machinery as experiment 1, plus three gates specific to this design:
 - **Injection fidelity gate** — the corrupted value is asserted to differ from
   the true value, and the true value is asserted to be what the task needs. An
   injection that accidentally returns the right answer would be measuring nothing.
+
+## Amendments
+
+Changes made after the design was frozen, each with its reason and its effect.
+
+### A1 — the `late` position (after stage 1, before stage 2)
+
+**Reason.** `late` was defined as "the first eligible call at or after model
+turn 3", chosen because it is decidable while the loop is running. Stage 1
+measured it firing **0 times in 32**. Agents call their data-fetching tool once,
+at turn 0 or 1, and never again; trajectories run 3.5 to 5.8 turns, so by turn 3
+the corruptible call is already in the past. Together with tasks that compute
+sums themselves rather than calling `sum_totals`, injections failed to fire in
+**62.5%** of attempts.
+
+**Change.** `late` becomes an ordinal rather than a turn threshold. A probe run
+per task counts how many times the targeted tool is actually called (M); the
+injection then fires on the **Mth** call — the last one that really occurs.
+`early` remains N=1. If the real run makes fewer than M eligible calls, the
+injection does not fire and the trajectory is recorded as not-applicable, as
+before.
+
+**Cost.** One extra clean trajectory per task, reused across that task's late
+cells. Negligible against a stage costing under a dollar.
+
+**Effect on results.** Stage 1's H5 was **UNDETERMINED for a design reason**,
+which the tables state explicitly; it was never reported as a finding about the
+agent. Stage 1's other verdicts are unaffected: H1, H2, H3 and H4 do not use the
+position factor, and their stage-1 decisions stand and collect no further data.
+Stage 2 re-runs the position factor under the corrected definition.
+
+**What was not changed.** No threshold, no hypothesis, no metric definition, no
+task. The stopping rule is applied to stage 2 exactly as written.
+
+**The underlying observation is kept, not discarded.** That a late injection is
+hard to construct is itself a fact about how these agents behave: they front-load
+data gathering, then reason over what is already in context. The practical
+implication — that the dangerous window is the *start* of a trajectory — is
+reported in the README.
