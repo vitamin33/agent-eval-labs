@@ -10,6 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # G6 checks that the commit history is organised by phase, which a
+          # shallow clone hides: the default fetch-depth of 1 leaves one commit
+          # and the check reports 0 phases.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

@@ -1172,6 +1172,7 @@ def gate_g6() -> list[Check]:
         checks.append(Check(f"reproduce-dry wrote {n} records", n == 100, "expected 100"))
 
     # --- commit history is organised by phase ----------------------------- #
+    shallow = (ROOT / ".git" / "shallow").exists()
     proc = run(["git", "log", "--pretty=%s"])
     subjects = proc.stdout.splitlines()
     phases = {m.group(1) for s_ in subjects if (m := re.match(r"Phase (\d+):", s_))}
@@ -1179,7 +1180,13 @@ def gate_g6() -> list[Check]:
         Check(
             f"commit history is organised by phase ({len(phases)} phases)",
             len(phases) >= 5,
-            f"found phase commits: {sorted(phases)}",
+            (
+                f"only {len(subjects)} commit(s) visible — this is a SHALLOW clone, "
+                "so the history exists but is not fetched. In CI set "
+                "`actions/checkout` with `fetch-depth: 0`."
+                if shallow or len(subjects) <= 2
+                else f"found phase commits: {sorted(phases)}"
+            ),
         )
     )
 
