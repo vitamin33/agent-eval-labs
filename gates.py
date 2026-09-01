@@ -1353,6 +1353,9 @@ def gate_g7() -> list[Check]:
       requires_live=True)
 def gate_g8() -> list[Check]:
     checks: list[Check] = []
+    # 8 tasks x (1 clean + 2 modes x 2 positions) runs per cell.
+    expected_for = {0: 40, 1: 80, 2: 200}
+
     files = sorted((EXP2 / "results").glob("traj-stage*.jsonl"))
     checks.append(
         Check(f"trajectory results present ({len(files)} file(s))", bool(files),
@@ -1361,10 +1364,28 @@ def gate_g8() -> list[Check]:
     if not files:
         return checks
 
-    path = files[-1]
-    records = read_records(path)
-    checks.append(Check(f"{path.name}: 80 trajectories", len(records) == 80,
-                        f"got {len(records)}"))
+    # Evaluate the newest COMPLETE run: a stage still in flight is not a result,
+    # and judging a partial file would report whatever it happens to contain.
+    complete = []
+    for f in files:
+        recs = read_records(f)
+        stage = recs[0].get("stage") if recs else None
+        if stage is not None and len(recs) == expected_for.get(stage):
+            complete.append((f, recs))
+    checks.append(
+        Check(
+            f"a completed stage exists ({len(complete)} of {len(files)})",
+            bool(complete),
+            "every trajectory file is partial — a stage still running is not a result",
+        )
+    )
+    if not complete:
+        return checks
+
+    path, records = complete[-1]
+    stage = records[0].get("stage")
+    checks.append(Check(f"{path.name}: {expected_for[stage]} trajectories (stage {stage})",
+                        len(records) == expected_for[stage], f"got {len(records)}"))
     providers = sorted({r.get("provider") for r in records})
     checks.append(Check("records come from the live provider", providers == ["deepseek"],
                         f"providers: {providers} (mock output is not a result)"))
@@ -1434,6 +1455,25 @@ def gate_g8() -> list[Check]:
                     f"({len(claimed)}/{len(wrong)})",
                 )
             )
+
+    # The adversarial review must exist and its cited tests must pass.
+    review = EXP2 / "REVIEW.md"
+    checks.append(exists("experiments/agent-verifier-gap/REVIEW.md", "file"))
+    if review.exists():
+        md = review.read_text()
+        rows = re.findall(r"^\|\s*(A\d+)\s+.+?\|\s*\*\*(.+?)\*\*\s*\|\s*(.+?)\s*\|$",
+                          md, re.MULTILINE)
+        checks.append(Check(f"review rows found: {len(rows)}", len(rows) >= 10, "expected >= 10"))
+        allowed = {"FIXED", "CLEAR", "SCOPED", "ACCEPTED", "PENDING LIVE DATA"}
+        bad = [r[0] for r in rows if r[1].strip() not in allowed]
+        checks.append(Check("every risk has a known verdict", not bad, f"unknown verdicts: {bad}"))
+        nodes = [m.group(1) for r in rows if (m := re.search(r"`([^`]+::[^`]+)`", r[2]))]
+        if nodes:
+            proc = run([interpreter(), "-m", "pytest", "-q", *nodes])
+            checks.append(Check(f"all {len(nodes)} cited tests pass", proc.returncode == 0,
+                                (proc.stdout + proc.stderr).strip()[-500:]))
+        checks.append(Check("review states the threats it does not remove",
+                            "does not remove" in md.lower(), "missing residual-threats section"))
 
     # The stopping rule must be applied, and its outcome stated.
     if results_md.exists():
