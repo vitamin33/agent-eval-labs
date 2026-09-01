@@ -260,13 +260,23 @@ mock responses and regenerates every artifact, byte-identically each time:
 make reproduce-dry
 ```
 
-The real experiment (~250 calls, well under $1 at current prices):
+The real experiments. Experiment 1 is ~250 calls for about $0.74; experiment 2
+is 280 trajectories for about $1.69:
 
 ```bash
 cp .env.example .env && chmod 600 .env   # then add your key
+
+# Experiment 1 — single answers
 make run-live          # arm 1 — generation
 make run-live-inject   # arm 2 — injected verification
-make report            # regenerate tables and charts from both arms
+make report
+
+# Experiment 2 — agent trajectories
+python experiments/agent-verifier-gap/runner_agent.py --live --stage 1
+python experiments/agent-verifier-gap/runner_agent.py --live --stage 2
+python experiments/agent-verifier-gap/report_agent.py \
+    --results experiments/agent-verifier-gap/results/traj-stage2-*.jsonl --level 95
+
 python gates.py --all
 ```
 
@@ -275,7 +285,7 @@ python gates.py --all
 instead.
 
 ```bash
-make test    # 247 unit + adversarial tests
+make test    # 383 unit + adversarial tests
 make gates   # every phase gate
 ```
 
@@ -351,6 +361,22 @@ experiments/verifier-gap/
   report.py                     generates the tables and both charts
   tasks/                        10 tasks, each with its planted failure mode
   results/                      append-only JSONL — the raw experimental data
+experiments/agent-verifier-gap/
+  RESEARCH.md                   pre-registration, hypotheses, stopping rule, amendments
+  PLAN.md                       task breakdown and budget
+  REVIEW.md                     adversarial review of the trajectory harness
+  CALIBRATION.md                pilot and both stages, including what went wrong
+  RESULTS.md                    generated — do not edit
+  env.py / fixtures.py          deterministic orderdesk state machine
+  inject.py                     four silent failures, with fingerprints
+  discoverability.py            proves every injection is exposable before any run
+  agent.py                      the tool-calling loop
+  agent_tasks.py                8 tasks, answer keys derived from the fixtures
+  runner_agent.py               the trajectory matrix
+  traj_metrics.py               detection, contamination, trajectory false green
+  traj_hypotheses.py            the staged stopping rule
+  report_agent.py               generates RESULTS.md
+  results/                      append-only JSONL — raw trajectories
 tests/                          harness self-tests, incl. the adversarial suite
 ```
 
@@ -365,7 +391,7 @@ tests/                          harness self-tests, incl. the adversarial suite
 6. A metric that could not be computed reports `null`, not `0`.
 7. Calibration rounds that failed are published, not quietly dropped.
 
-## Experiment 2 — the verifier gap in agent trajectories (designed, pre-registered)
+## Experiment 2 — the verifier gap in agent trajectories
 
 Experiment 1 has a substrate problem, and experiment 2 is the fix. "Write a
 function that parses CSV" is one call, no tools, no state, no steps — an LLM
@@ -394,21 +420,24 @@ The design is **staged with a pre-registered stopping rule**: a hypothesis whose
 genuinely marginal questions pay for the full matrix. The 99%/95% split across
 the two looks is what keeps that from being ordinary peeking.
 
-**Built so far:** the `orderdesk` environment, four injection types, the
-discoverability proof, the tool-calling agent loop, and the eight tasks — all
-gated by **G7**. The stage-0 pilot has run.
+**Complete: 280 trajectories across two stages, $1.69.** Five hypotheses
+decided, one left open and reported as open. Results in
+[`RESULTS.md`](experiments/agent-verifier-gap/RESULTS.md), every calibration
+round in [`CALIBRATION.md`](experiments/agent-verifier-gap/CALIBRATION.md), the
+harness review in [`REVIEW.md`](experiments/agent-verifier-gap/REVIEW.md).
 
-**Stage-0 pilot result:** a tool-choice decision costs **290 output tokens**, not
-the 30k experiment 1 spent on code generation, so the full 200-trajectory matrix
-projects to **$1.07** rather than the feared $32. Clean ceiling 8/8. The pilot
-also found three defects that would each have produced a confident wrong number
-— most seriously, detection matching on tool name alone counted an agent's
-ordinary progress as suspicion. See
-[`CALIBRATION.md`](experiments/agent-verifier-gap/CALIBRATION.md).
+The rounds that failed are the ones worth reading. A stage-0 pilot cost $0.04 and
+found three defects that would each have produced a confident wrong number —
+most seriously, detection matching on tool name alone, which counted an agent's
+ordinary progress as suspicion and would have concluded that agents reliably
+catch silent failures. Stage 1 exposed a `late` position that never fired.
+Stage 2 produced a −26 pp "sign reversal" that turned out to be a task effect
+wearing a position label, and is published disclaimed rather than reported.
 
 ```bash
 python experiments/agent-verifier-gap/discoverability.py   # 16/16 pairs discoverable
-python gates.py --gate G7
+python gates.py --gate G7   # substrate
+python gates.py --gate G8   # the run
 ```
 
 ## License
