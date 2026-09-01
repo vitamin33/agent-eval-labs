@@ -56,14 +56,14 @@ a documented silent-failure bug, `deepseek-v4-flash` approved **none of them**,
 and every rejection came with a repair that passed the asserts.
 
 **Experiment 2 — verifying its own twelve-step trajectory.** One tool result is
-silently corrupted — plausible, non-erroring, wrong. The agent noticed **1 time
-in 20**. Of the eleven trajectories that finished wrong, **eleven claimed
-success.** All of them.
+silently corrupted — plausible, non-erroring, wrong. The agent noticed **8 times
+in 70**. Of the forty-five trajectories that finished wrong, **forty-five
+claimed success.** Every single one.
 
 | | Experiment 1 (one answer) | Experiment 2 (trajectory) |
 |---|---|---|
-| false-green rate | **0%** [0.0, 7.1] | **100%** [74.1, 100.0] |
-| caught the planted fault | 50 / 50 | 1 / 20 |
+| false-green rate | **0%** [0.0, 7.1] | **100%** [92.1, 100.0] |
+| caught the planted fault | 50 / 50 | 8 / 70 |
 | verdict on the thesis | falsified | supported |
 
 The model has not changed. What changed is that reviewing ten lines of code in
@@ -71,21 +71,28 @@ front of you is a different task from re-deriving twelve steps of accumulated
 state — and only the second is what an agent actually does before it says
 "done".
 
-Two further findings, both decided at the interim look:
+Three further findings from 200 trajectories:
 
 - **Errors run a long way before anything notices.** Median contamination depth
-  is **8 tool-call steps**: the agent keeps acting on the poisoned value for most
-  of the trajectory.
+  is **8 tool-call steps**, reaching 21: the agent keeps acting on the poisoned
+  value for most of the trajectory.
 - **The obvious fix does nothing.** A per-step "check your work is consistent"
   instruction — the intervention people actually ship — moved detection by
-  **−10 pp at 0.99x the cost**. It was free, and it was useless.
+  **+5.7 pp at 1.03x the cost**, well inside noise at this sample size. It was
+  free, and it did not help.
+- **Noticing is not the problem; noticing at all is.** When the agent did detect
+  the corruption it recovered **8 times out of 8**. The predicted failure — spot
+  it and still fail — did not happen. The failure is that detection is rare.
 
-**Read this before quoting the numbers.** Experiment 2's effective sample is 20
-injected trajectories, not the 64 planned: the injection never fired in 62.5% of
-attempts, because agents front-load their data gathering and the "late" position
-could not be constructed. H5 and H6 remain **UNDETERMINED**, and the intervals
-are wide. Full accounting in
-[`CALIBRATION.md`](experiments/agent-verifier-gap/CALIBRATION.md).
+**Read this before quoting the numbers.** The injection failed to fire in 43.8%
+of attempts, so the effective sample is 70 injected trajectories rather than 160.
+**H5 is UNDETERMINED and stays open**: pooled across tasks it appears to reverse
+sign at −26 pp, but every late injection that fired came from a task whose tool
+is called once — where "late" *is* "early" — so that figure is a task effect
+wearing a position label. It is published and disclaimed rather than reported.
+Full accounting in
+[`CALIBRATION.md`](experiments/agent-verifier-gap/CALIBRATION.md); the harness
+review is [`REVIEW.md`](experiments/agent-verifier-gap/REVIEW.md).
 
 ## Experiment 1 — The Verifier Gap
 

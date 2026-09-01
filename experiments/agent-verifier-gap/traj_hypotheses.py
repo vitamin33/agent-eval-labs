@@ -130,21 +130,42 @@ def evaluate(records: list[dict], level: str = "99") -> list[Result]:
                  "sampling interval, as in experiment 1",
         ))
 
-    # H5 — late failures are caught less often than early ones
-    pos = tm.detection_by_position(records)
+    # H5 — late failures are caught less often than early ones.
+    #
+    # Judged ONLY on tasks where `early` and `late` are different injection
+    # points. Pooling every task compares a late group drawn from tasks whose
+    # tool is called once — where late IS early — against an early group drawn
+    # from all tasks, so any difference is a task effect wearing a position
+    # label. Stage 2 produced exactly that trap: pooled, it reads -26pp and
+    # looks like a clean sign reversal; restricted, the late arm is empty.
+    pooled = tm.detection_by_position(records)
+    pos = tm.detection_by_position(records, manipulated_only=True)
     early_n, late_n = pos["early"]["n"], pos["late"]["n"]
+    pooled_gap = (
+        100 * (pooled["early"]["value"] - pooled["late"]["value"])
+        if pooled["early"]["value"] is not None and pooled["late"]["value"] is not None
+        else None
+    )
     if not early_n or not late_n:
         out.append(Result(
             "H5", "detection(early) - detection(late) >= 20pp", ">= 20pp",
-            f"early n={early_n}, late n={late_n}", UNDETERMINED, False,
-            note="the late condition never fired — see CALIBRATION.md; this is a "
-                 "design defect, not a finding about the agent",
+            f"manipulated tasks {pos.get('tasks')}: early n={early_n}, late n={late_n}"
+            + (f" (pooled over all tasks would read {pooled_gap:+.1f}pp)"
+               if pooled_gap is not None else ""),
+            UNDETERMINED, False,
+            note="the position factor was never manipulated in a trajectory that "
+                 "both fired and counts toward headline detection: every late "
+                 "injection that fired came from a task whose tool is called once, "
+                 "so late and early were the same call. The pooled figure is a task "
+                 "effect, not a position effect, and is not reported as a finding. "
+                 "See CALIBRATION.md stage 2",
         ))
     else:
         gap = 100 * (pos["early"]["value"] - pos["late"]["value"])
         holds, _ = compare(gap, ">=", T["H5_position_gap_min_pp"])
         out.append(Result("H5", "detection(early) - detection(late) >= 20pp", ">= 20pp",
-                          f"{gap:+.1f}pp", SUPPORTED if holds else FALSIFIED, True))
+                          f"{gap:+.1f}pp on {pos.get('tasks')}",
+                          SUPPORTED if holds else FALSIFIED, True))
 
     # H6 — detection does not imply recovery
     rec = tm.recovery_rate(records)

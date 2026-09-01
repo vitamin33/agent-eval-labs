@@ -146,6 +146,73 @@ with its rationale recorded above, and stage 2 will re-run it rather than
 reinterpreting stage 1. The stopping rule was applied exactly as written,
 including to H4, which it decided against the prediction.
 
-## Stage 2 — k = 5, for H5 and H6 only
+## Stage 2 — k = 5
 
-Pending. Runs the `late` fix; H1–H4 are closed and collect no further data.
+`results/traj-stage2-20260901T171546Z.jsonl`, 200 trajectories, **$1.22**.
+Projected from the pilot at $1.07; the estimate held again.
+
+### Result
+
+| | stage 1 (n=80) | stage 2 (n=200) |
+|---|---|---|
+| clean outcome pass | 16/16 | 39/40 |
+| **trajectory false-green rate** | 11/11 = 100% | **45/45 = 100%** [92.1, 100.0] |
+| detection rate | 1/20 = 5% | **8/70 = 11.4%** [5.9, 21.0] |
+| contamination depth (median) | 8 | **8** (range 1–21) |
+| recovery rate | 1/1 | **8/8 = 100%** [67.6, 100.0] |
+| injection never fired | 62.5% | 43.8% |
+
+Forty-five wrong trajectories. Forty-five claims of success. Not one instance of
+the agent finishing wrong and saying so.
+
+**H6 is falsified, and interestingly.** It predicted recovery below 60%:
+detecting a problem and still failing. Observed **8 of 8**. Detection is rare,
+but when it happens the agent recovers every time. The failure is not that
+agents cannot fix what they notice — it is that they almost never notice.
+
+### The `late` fix worked, and still could not deliver H5
+
+Amendment A1 replaced the turn-based `late` with an ordinal: a probe counts how
+many times a task calls the targeted tool (M), and the injection fires on the
+Mth. Firing improved from 37% to 56%, and the probes did their job — T3, T4 and
+T8 call `get_customer` seven times, T7 three.
+
+But **H5 is still UNDETERMINED, and nearly produced a false finding.**
+
+Pooled across all tasks, detection reads early 2/50 = 4% against late 6/20 =
+30%: a **−26 pp sign reversal**, the exact "more interesting result" the
+pre-registration promised to report rather than bury. It is not a result at all.
+
+Every late injection that actually fired came from **T1 and T6** — tasks whose
+tool is called once, so `inject_at_nth = 1` and *late was the same call as
+early*. On the tasks where the factor genuinely differs (T3, T4, T8), the late
+injection never fired: the probe measured seven calls, but in the injected run
+the agent made fewer, so the Mth call never arrived. T7 fired but is the
+confound control and is excluded from headline detection.
+
+So the late arm, restricted to trajectories where position was actually
+manipulated, is **empty**. The pooled −26 pp compares a late group drawn from
+two tasks against an early group drawn from five: a task effect wearing a
+position label. Within T1 alone, early 2/10 versus late 5/10 with an *identical*
+injection point, which is sampling noise and nothing else.
+
+H5 is reported UNDETERMINED with the pooled figure shown and explicitly
+disclaimed. `test_h5_refuses_a_pooled_comparison_that_is_a_task_effect` pins it
+so the trap cannot reopen.
+
+### The residual defect, named
+
+The probe's M does not transfer reliably to the injected run: the agent makes
+fewer calls under injection than it did clean. Fixing it properly means either
+tasks that force repeated reads of the same entity, or injecting on the *last*
+eligible call by buffering — neither is a tweak, and neither is done on the
+basis of results already seen. **H5 stays open.** Experiment 2 reports five
+decided hypotheses and one it could not answer.
+
+### What was not changed after seeing stage 2
+
+No threshold, no metric, no task. The H5 evaluation was narrowed to tasks where
+the factor was manipulated — a correctness fix whose criterion (`inject_at_nth`)
+comes from the probe, measured before any detection is observed, and pinned by
+`test_restriction_is_decided_by_the_probe_not_the_outcome`. The pooled number is
+published beside it so a reader can see exactly what was rejected and why.

@@ -1478,9 +1478,11 @@ def gate_g8() -> list[Check]:
     # The stopping rule must be applied, and its outcome stated.
     if results_md.exists():
         md = results_md.read_text()
+        # 99% at the interim look, 95% at the final one. Either is fine; what
+        # is not fine is a report that does not say which decided it.
         checks.append(Check("stopping rule level is stated",
-                            "99%" in md and "stopping rule" in md,
-                            "the interim look must say which level decided it"))
+                            ("99%" in md or "95%" in md) and "stopping rule" in md,
+                            "the report must name the level its verdicts were judged at"))
         checks.append(Check("undecided hypotheses are named",
                             "UNDETERMINED" in md or "Continues to stage 2" in md,
                             "a hypothesis that did not resolve must say so"))
