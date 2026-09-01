@@ -342,10 +342,22 @@ injection must be **discoverable** (a tool sequence exists that exposes it —
 otherwise the task is impossible and the failure is the harness's), and every
 corrupted value is asserted to actually differ from the truth.
 
-**Built so far (P1–P3):** the `orderdesk` environment, the four injection types,
-and the discoverability proof — all gated by **G7**. The agent loop and
-trajectory metrics are next; [`PLAN.md`](experiments/agent-verifier-gap/PLAN.md)
-has the breakdown and budget.
+The design is **staged with a pre-registered stopping rule**: a hypothesis whose
+99% interval already clears its threshold after stage 1 stops there; only
+genuinely marginal questions pay for the full matrix. The 99%/95% split across
+the two looks is what keeps that from being ordinary peeking.
+
+**Built so far:** the `orderdesk` environment, four injection types, the
+discoverability proof, the tool-calling agent loop, and the eight tasks — all
+gated by **G7**. The stage-0 pilot has run.
+
+**Stage-0 pilot result:** a tool-choice decision costs **290 output tokens**, not
+the 30k experiment 1 spent on code generation, so the full 200-trajectory matrix
+projects to **$1.07** rather than the feared $32. Clean ceiling 8/8. The pilot
+also found three defects that would each have produced a confident wrong number
+— most seriously, detection matching on tool name alone counted an agent's
+ordinary progress as suspicion. See
+[`CALIBRATION.md`](experiments/agent-verifier-gap/CALIBRATION.md).
 
 ```bash
 python experiments/agent-verifier-gap/discoverability.py   # 16/16 pairs discoverable

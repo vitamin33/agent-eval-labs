@@ -198,6 +198,24 @@ class DeepSeekProvider:
 
         raise RuntimeError(f"every response_format attempt failed: {last_exc}")
 
+    def chat_tools(self, messages: list[dict], tools: list[dict]) -> tuple[Any, CallResult]:
+        """One tool-calling turn. Returns (raw message, accounting).
+
+        Separate from `complete` because an agent step needs the structured
+        `tool_calls` back, not flattened text. Accounting is identical so the
+        two experiments' cost numbers stay comparable.
+        """
+        t0 = time.perf_counter()
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            tools=tools,
+            max_tokens=self.max_tokens,
+            **self.sampling,
+        )
+        latency = time.perf_counter() - t0
+        return response.choices[0].message, self._to_result(response, latency, structured=False)
+
     @staticmethod
     def _to_result(response, latency: float, structured: bool) -> CallResult:
         choice = response.choices[0]

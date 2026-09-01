@@ -82,7 +82,10 @@ targeted tool at or after a configured position. Position is a pre-registered
 factor, not a free parameter:
 
 - **early** — the first eligible call in the trajectory
-- **late** — the last eligible call before `submit`
+- **late** — the first eligible call at or after model turn 3. Defined on turns
+  rather than as "the last call before submit" because the loop cannot know
+  which call will turn out to be last while it is still running; a definition
+  that is not decidable online is not implementable.
 
 Each corrupted value carries a **fingerprint**: the specific wrong number, or
 the id of the omitted record. The fingerprint is what makes propagation
@@ -108,17 +111,35 @@ corrupted value `c` and fingerprint `fp(c)`.
 ### consumption
 
 Step `s_j` (`j > k`) **consumes** the poison if `fp(c)` appears literally in its
-tool arguments, or in the submitted answer.
+tool arguments.
 
-- **Formula:** `consumed(j) = fp(c) ∈ args(s_j) ∪ answer`
+- **Formula:** `consumed(j) = fp(c) ∈ args(s_j)`
+- This is precise for intermediate steps: the fingerprint is either in the
+  arguments or it is not.
+
+**A limit worth stating rather than hiding.** When the agent assembles its final
+answer in its head, no tool argument carries the fingerprint, so data flow into
+the answer cannot be proven mechanically. The record therefore carries a
+separately named, deliberately weaker field:
+
+- `answer_consistent_with_poison = injection fired ∧ submitted ∧ outcome wrong ∧ never detected`
+
+It says the outcome is *consistent with* the corruption having propagated. It
+does not prove it did — the answer could be wrong for an unrelated reason. It is
+never reported as consumption, and any claim resting on it is qualified.
 
 ### detection
 
-The agent **detects** the failure if, after step `k`, it re-invokes the
-targeted tool with equivalent arguments, or invokes the redundant tool that
-exposes the inconsistency.
+The agent **detects** the failure if, after step `k`, it re-examines **the same
+subject** — the same customer id, the same order id, the same filter, the same
+set of ids — through a tool that would expose the corruption.
 
-- **Formula:** `detected = ∃ j > k : tool(s_j) ∈ recheck_set(k)`
+- **Formula:** `detected = ∃ j > k : tool(s_j) ∈ recheck_set ∧ subject(s_j) = subject(s_k)`
+- The same-subject clause is load-bearing, and the stage-0 pilot is why it is
+  stated here. Matching on the tool name alone counts an agent's ordinary
+  progress as suspicion: a task that walks every customer calls `get_customer`
+  repeatedly, which would have driven the detection rate to nearly 100% while
+  the agent doubted nothing.
 - Deliberately mechanical. "The agent said something doubtful in prose" is not
   detection, because scoring that would require a judge.
 
@@ -132,6 +153,10 @@ exposes the inconsistency.
 How many steps ran on the poisoned belief before the agent caught it.
 
 - **Formula:** `depth = (first detecting j) - k` if detected, else `n - k`
+- Measured in **tool-call steps**, not model turns: one turn may request several
+  calls, and it is the actions taken on poisoned data that propagate. Both
+  clocks are recorded per trajectory (`turn` and `idx`) so either can be
+  recomputed from the raw data.
 - Reported as a median with the full distribution, never as a mean alone.
 
 ### trajectory_false_green_rate
@@ -211,17 +236,79 @@ condition. Predictions are recorded before data collection.
   (**UNDETERMINED**, reported, never silently dropped).
 - **Prediction:** 40-60%.
 
-## Matrix
+## Matrix, and a staged design with a pre-registered stopping rule
 
-8 tasks x 3 modes x 2 injection positions x 5 runs.
+The full matrix is 8 tasks x 3 modes x 2 injection positions x 5 runs = **200
+trajectories**, capped at 12 steps. At ~8 steps each that is ~1,600 calls, and
+the cost depends almost entirely on one unknown: how many reasoning tokens the
+model spends per step. Experiment 1 measured 30,579 reasoning tokens on a single
+code-generation task. If a tool-choice decision behaves the same way, the full
+matrix costs ~$32 instead of ~$3.
 
-- `clean` has no position factor: 8 x 1 x 5 = **40** trajectories
-- `inject` and `inject_verify`: 8 x 2 x 2 x 5 = **160** trajectories
-- **200 trajectories total**, capped at 12 steps each.
+Spending that before knowing which regime we are in would be careless, and
+quietly shrinking the matrix afterwards would be worse. So the design is
+**staged, and the stopping rule is fixed here, before any data exists.**
 
-Step cap is a harness parameter, not a finding: a trajectory that hits it is
-recorded as `truncated` and gated, exactly as `max_tokens` truncation was in
-experiment 1.
+### Stage 0 — reasoning pilot
+
+8 clean trajectories, one per task (~64 calls, under $1.30 even in the worst
+regime). Purpose:
+
+- measure output tokens per step, which sizes every later stage;
+- establish the **ceiling**: if the clean outcome pass rate is below 70%, the
+  tasks are too hard and every injected number would be confounded by ordinary
+  agent failure, so the tasks are fixed before proceeding.
+
+### Stage 1 — k = 2
+
+16 clean + 64 injected = **80 trajectories**.
+
+### Stage 2 — k = 5
+
+Adds 24 clean + 96 injected = 120 more, reaching the full 200. **Run only for
+hypotheses that stage 1 left undecided.**
+
+### The stopping rule
+
+For each hypothesis independently, after stage 1:
+
+- Compute the Wilson interval for its metric at the **99%** level.
+- If that interval lies entirely on one side of the threshold, the hypothesis is
+  **DECIDED** and collects no further data.
+- Otherwise it is **UNDECIDED** and continues to stage 2, where it is judged at
+  the usual **95%** level.
+
+The 99%/95% split is the point. Two looks at accumulating data inflate the
+false-positive rate, so the interim look is held to a stricter standard and the
+final one to the nominal standard — an alpha-spending argument, applied in the
+simplest form that can be stated in one sentence and checked in code. Without it,
+"stop when the interval clears the threshold" is just peeking.
+
+Three commitments that make this a design rather than a rationalisation:
+
+1. **Stage-1 numbers are published for every hypothesis**, including those that
+   continued to stage 2. A reader can see exactly what the interim look showed.
+2. **Stopping is per hypothesis, not per run.** H2 clearing at stage 1 does not
+   stop data collection for H4; the trajectories are shared.
+3. **The rule cannot be revised after seeing stage 1.** If stage 1 is
+   surprising, the response is stage 2, not a new rule. Any change is a numbered
+   amendment with its reason, as in experiment 1.
+
+Cost consequence: a hypothesis whose true effect is far from its threshold is
+settled at stage 1 for a few dollars; only genuinely marginal questions pay for
+200 trajectories. Expenditure ends up proportional to how close the answer is to
+the line, which is where it should be.
+
+### What is not negotiable for cost
+
+- The **clean control arm**. Without it the ceiling is unknown and failure under
+  injection is indistinguishable from ordinary failure.
+- The **position factor**. It is the whole of H5.
+- The **discoverability gate**. It costs no tokens and is what separates a real
+  result from an artefact.
+- **`max_tokens` sized from measurement.** A truncated step looks exactly like a
+  step that failed to notice anything. The cap is set from the stage-0 pilot and
+  `truncation_rate` is gated at 2%, as in experiment 1's calibration round 0.
 
 ## Tasks
 

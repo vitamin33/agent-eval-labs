@@ -32,6 +32,15 @@ OFF_BY_ONE = "off_by_one"
 WRONG_FIELD = "wrong_field"
 
 
+# Which tool each injection kind corrupts.
+TARGET_TOOL = {
+    OMISSION: "list_orders",
+    STALE: "get_order",
+    OFF_BY_ONE: "sum_totals",
+    WRONG_FIELD: "get_customer",
+}
+
+
 class InjectionNotApplicable(Exception):
     """The trajectory never called the targeted tool in a way that could be
     corrupted. Recorded, never silently treated as a clean run."""
@@ -126,14 +135,46 @@ class Injection:
     # --- detection --------------------------------------------------------- #
 
     def recheck_tools(self) -> set[str]:
-        """Tool calls that would expose the corruption — the operational
-        definition of the agent acting on suspicion."""
+        """Tools that could expose the corruption, ignoring arguments."""
         return {
             OMISSION: {"count_orders", "list_orders"},
             STALE: {"get_order", "get_shipment"},
             OFF_BY_ONE: {"get_order", "sum_totals"},
-            WRONG_FIELD: {"get_customer", "list_orders", "count_orders"},
+            WRONG_FIELD: {"get_customer"},
         }[self.kind]
+
+    def is_recheck(self, tool: str, args: dict) -> bool:
+        """True only when the call re-examines THE SAME SUBJECT as the
+        corrupted one.
+
+        The tool name alone is not enough, and assuming it was is a mistake the
+        stage-0 pilot caught: an agent working through a task calls
+        `get_customer` for every customer, and counting those as suspicion
+        would have driven the detection rate to nearly 100% without the agent
+        doubting anything. Detection has to mean re-asking the same question.
+        """
+        if tool not in self.recheck_tools():
+            return False
+        prior = self.call_args or {}
+
+        if self.kind == OMISSION:
+            # The same filter, by either route.
+            return (args.get("status") == prior.get("status")
+                    and args.get("region") == prior.get("region"))
+
+        if self.kind == STALE:
+            return args.get("order_id") == prior.get("order_id")
+
+        if self.kind == OFF_BY_ONE:
+            ids = set(prior.get("order_ids") or [])
+            if tool == "sum_totals":
+                return set(args.get("order_ids") or []) == ids
+            return args.get("order_id") in ids  # re-deriving a component
+
+        if self.kind == WRONG_FIELD:
+            return args.get("customer_id") == prior.get("customer_id")
+
+        return False
 
 
 def _previous_status(current: str) -> str:
