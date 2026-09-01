@@ -293,6 +293,42 @@ class MockProvider:
         # Deterministic stand-in for real usage numbers.
         return max(1, len(text) // 4)
 
+    def chat_tools(self, messages: list[dict], tools: list[dict]):
+        """A scripted trajectory for offline runs.
+
+        Walks the tools an injection can target — list_orders, get_customer,
+        get_order, sum_totals — then submits, so a dry run exercises every
+        injection path and the whole record schema without a network call.
+        Deterministic: the step index is read from the conversation itself.
+
+        Output is SYNTHETIC. Records carry provider="mock" and the gates refuse
+        to read them as results.
+        """
+        import types
+
+        n_tool_msgs = sum(1 for m in messages if m.get("role") == "tool")
+        script = [
+            ("list_orders", {"status": "pending"}),
+            ("get_customer", {"customer_id": "C1"}),
+            ("get_order", {"order_id": "O01"}),
+            ("sum_totals", {"order_ids": ["O01", "O03"]}),
+            ("submit", {"answer": 2, "claims_success": True, "confidence": 90}),
+        ]
+        name, args = script[min(n_tool_msgs, len(script) - 1)]
+        call = types.SimpleNamespace(
+            id=f"call_{n_tool_msgs}", type="function",
+            function=types.SimpleNamespace(name=name, arguments=json.dumps(args)),
+        )
+        message = types.SimpleNamespace(content="", tool_calls=[call])
+        blob = json.dumps(messages)[:4000]
+        out = self._tokens(json.dumps(args))
+        return message, CallResult(
+            text="", input_tokens=self._tokens(blob), output_tokens=out,
+            model=f"{self.model}-mock", latency_s=0.0, stop_reason="tool_calls",
+            structured=False, cache_hit_tokens=0, reasoning_tokens=out // 2,
+            truncated=False,
+        )
+
     def complete(
         self,
         system: str,
