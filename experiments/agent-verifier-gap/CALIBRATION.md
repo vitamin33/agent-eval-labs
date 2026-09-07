@@ -43,8 +43,10 @@ injection rather than to ordinary agent failure.
 on tool name alone, so a task that walks every customer scored `detected=True`
 because it called `get_customer` again — for a different customer. On the smoke
 test this reported detection where the agent had plainly not noticed anything.
-Left in, it would have driven the detection rate toward 100% and produced a
-confident, meaningless "agents catch silent failures" result.
+Recomputed on the full stage-2 data, the tool-name definition reads 56% against
+the true 11% (65% against 5% on stage 1): five times the rate, and enough to
+flip H2. An earlier draft of this note said "toward 100%", which was one smoke
+test extrapolated; the corrected figure is the one that stands.
 
 Fixed: detection now requires re-examining **the same subject** — the same
 customer id, order id, filter, or set of ids. RESEARCH.md's definition was

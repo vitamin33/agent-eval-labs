@@ -138,7 +138,7 @@ set of ids — through a tool that would expose the corruption.
 - The same-subject clause is load-bearing, and the stage-0 pilot is why it is
   stated here. Matching on the tool name alone counts an agent's ordinary
   progress as suspicion: a task that walks every customer calls `get_customer`
-  repeatedly, which would have driven the detection rate to nearly 100% while
+  repeatedly, which reads 56% on the stage-2 data against a true 11%, while
   the agent doubted nothing.
 - Deliberately mechanical. "The agent said something doubtful in prose" is not
   detection, because scoring that would require a judge.

@@ -150,7 +150,7 @@ class Injection:
         The tool name alone is not enough, and assuming it was is a mistake the
         stage-0 pilot caught: an agent working through a task calls
         `get_customer` for every customer, and counting those as suspicion
-        would have driven the detection rate to nearly 100% without the agent
+        reads 56% on the full data against a true 11%, without the agent
         doubting anything. Detection has to mean re-asking the same question.
         """
         if tool not in self.recheck_tools():

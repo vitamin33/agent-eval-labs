@@ -42,9 +42,13 @@ customer calls `get_customer` repeatedly, for *different* customers. On the firs
 smoke test this reported `detected=True` on a trajectory where the agent had
 plainly noticed nothing, and had confidently submitted a wrong answer.
 
-Left in, detection would have run toward 100% and the write-up would have
-concluded that agents reliably catch silent tool failures. The published 5% is
-what remains once "re-examined **the same subject**" is required — same customer
+Left in, detection reads **56%** on the same stage-2 data (65% on stage 1), five
+times the true rate and enough to flip H2 from supported to falsified. The
+review originally said "toward 100%", extrapolated from one smoke-test
+trajectory on a task that walks every customer; the figure on the full data is
+lower, and it is recorded here because an overclaim in a review of overclaims is
+the one kind that must not stand. The published 11.4% is what remains once
+"re-examined **the same subject**" is required — same customer
 id, same order id, same filter, same set of ids.
 
 ## A2 — Discoverability (**clear**)

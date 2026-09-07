@@ -428,9 +428,7 @@ harness review in [`REVIEW.md`](experiments/agent-verifier-gap/REVIEW.md).
 
 The rounds that failed are the ones worth reading. A stage-0 pilot cost $0.04 and
 found three defects that would each have produced a confident wrong number —
-most seriously, detection matching on tool name alone, which counted an agent's
-ordinary progress as suspicion and would have concluded that agents reliably
-catch silent failures. Stage 1 exposed a `late` position that never fired.
+most seriously, detection matching on tool name alone counted an agent's ordinary progress as suspicion, reading 56% against a true 11% and flipping a hypothesis. Stage 1 exposed a `late` position that never fired.
 Stage 2 produced a −26 pp "sign reversal" that turned out to be a task effect
 wearing a position label, and is published disclaimed rather than reported.
 
