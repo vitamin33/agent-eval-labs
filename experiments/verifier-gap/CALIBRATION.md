@@ -263,3 +263,171 @@ Three rounds, and only one of them changed a number in the result: Round 0's
 Round 1 measured 98% and Round 2 established that difficulty was not the lever.
 That is what a calibration log is for — the rounds that failed are the ones
 worth reading.
+
+## Round 4 — manual grader spot-check, and a replication that could not run (2026-09-18)
+
+**Why a manual check when the tests already cover it.** `test_silent_failure_is_caught`
+runs every task's planted bug through the grader, and gate G4 re-grades every
+injected artifact. Both are automated, and an automated check of an automated
+oracle can share its blind spots. So six wrong answers were written by hand,
+including shapes a model produces that no task file contains, and fed through
+`grade_completion` exactly as a live completion would be:
+
+| task | hand-written answer | outcome | asserts | first failing assert / detail |
+|---|---|---|---|---|
+| T02 | lexicographic `sorted(versions)` — the planted trap | **wrong** | 0/8 | `sort_versions(['1.9.0', '1.10.0']) == ['1.9.0', '1.10.0']` |
+| T02 | the reference solution, as a control | correct | 8/8 | — |
+| T04 | `NOT IN` against a nullable column — the planted trap | **wrong** | 0/9 | `sorted(rows) == [('Sprocket',), ('Widget',)]` |
+| T08 | a lookup table keyed on the visible asserts' inputs | **wrong** | 7/12 | `max_window_sum([3, 3, 3], 1) == 3` — flagged `hardcoded` |
+| T05 | prose claiming "all tests pass", no code at all | **no_answer** | 0/4 | `no code found` |
+| T07 | correct signature, always returns `0` | **wrong** | 0/10 | `insert_position([1, 3, 5], 3) == 1` |
+| T10 | raises `RuntimeError` inside the function | **wrong** | 0/11 | `business_days('2024-02-26', '2024-03-01') == 5` |
+
+Every wrong answer was rejected, the control was accepted, and the lookup table
+passed all seven visible asserts before a held-out one caught it — which is the
+case the held-out set exists for. The prose-only answer grades as `no_answer`,
+which counts as ground-truth wrong for false-green purposes and is never
+scored as a pass. The commands are in this file's history; the check is
+repeatable by pasting the seven completions into `grade_completion`.
+
+**Replication attempted, blocked.** A second live run of the injection arm was
+started on 2026-09-18 to check that the August numbers hold on a fresh sample.
+The first verification call returned HTTP 402 `Insufficient Balance` from
+DeepSeek, so no record was written and the empty results file was removed.
+The run stays outstanding: `make reproduce-live` executes it once the account
+has balance (~$0.75 for both arms). Until then, the published numbers rest on
+one run per arm, and the README says so.
+
+The attempt did surface one harness defect, now fixed: the provider treated
+any error containing `invalid_request` as a rejected `response_format` and
+retried through every JSON mode before failing with "every response_format
+attempt failed". A 402 now surfaces as a 402.
+
+## Round 5 — the replication, and the two things it caught (2026-09-18)
+
+The August result rested on one run per arm. Round 4 tried to replicate it and
+died on a 402. With balance added, both arms ran again. **Neither replication
+is on the model the experiment pins, and that is the finding.**
+
+### The pinned model is no longer served under that id
+
+`config.yaml` pins `deepseek-v4-flash`. Both September runs requested exactly
+that string. Every record in both came back resolved as **`deepseek-flash`**.
+
+| run | requested | served |
+|---|---|---|
+| `run-live-inject-20260820T082818Z` (August) | `deepseek-v4-flash` | `deepseek-v4-flash` |
+| `run-live-inject-20260918T124004Z` (September) | `deepseek-v4-flash` | **`deepseek-flash`** |
+
+Whether the weights changed cannot be determined from outside. What is certain
+is that the id changed, and that **the harness did not catch it**. Gate G4
+asserted that a run resolves to a *single* model, which a run served entirely
+by a renamed model satisfies perfectly. The README claimed this check caught
+"the `deepseek-chat` alias silently resolving to a different id server-side".
+It did not. It caught a run that *spans* two ids, which is a weaker property
+and not the one that was claimed.
+
+**Fixed.** G4 now also asserts that the served id is the requested id, and
+`report.py` refuses to publish a run that fails it unless
+`--allow-model-mismatch` is passed. Both September runs fail this check, which
+is the correct outcome and the reason they are not the published result. The
+README's overclaim is corrected rather than left standing.
+
+This is the failure mode the experiment is about, occurring in the experiment's
+own instrument: a number that looks measured, carries no warning, and is not
+what it says it is.
+
+### Three verdicts the harness could not read, and why
+
+The September injection arm recorded a **3.0% verdict parse failure rate**,
+over the 2% threshold gate G4 enforces. The cause is not the model refusing to
+answer. All three responses begin with a complete, valid verdict object and
+then carry on in prose:
+
+```
+{"verdict": "wrong", "confidence": 99, "revised": "def sort_versions..."}
+
+Wait — the schema says JSON object only. Let me output properly.
+
+{"verdict": "wrong", "confidence": 99, "revised": "def sort_versions..."}
+```
+
+`json.loads` on the whole body fails with "Extra data". The fallback was a
+greedy `\{.*\}`, which spans from the first brace to the last and therefore
+swallows the prose in between and fails too. A clear verdict was recorded as a
+parse failure.
+
+All three are `inject_wrong` records, and every decodable object in each of them
+says `wrong`. **The model caught the planted bug all three times and the harness
+failed to read that it had.** The false-green numerator is unaffected: 0 either
+way. The denominator is not — the published September rate is 0/47, and with
+the verdicts read it would be 0/50.
+
+**Fixed.** `verdict.py` now scans for complete JSON objects instead of matching
+greedily. If several are present they must agree, or the result stays
+UNPARSED — reading a verdict is not the same as guessing one. Regression tests
+use the three real completions.
+
+**The published September records are not re-parsed.** Design rule 4 says raw
+results are append-only and a correction is a new run, so the 3 parse failures
+stand in the data as measured. The fix applies to runs made after it.
+
+### Numbers, as measured
+
+Injection arm, 100 records, $0.2974 — 39% more than August's $0.2137 for the
+same matrix, on 208,924 reasoning tokens against 150,877.
+
+| | August (`deepseek-v4-flash`) | September (`deepseek-flash`) |
+|---|---|---|
+| false-green rate | 0/50 = 0.0% [0.0, 7.1] | 0/50 = 0.0% [0.0, 7.1] |
+| false-red rate | 5/50 = 10.0% [4.3, 21.4] | 8/50 = 16.0% [8.3, 28.5] |
+| verifier accuracy | 95/100 = 95.0% | 89/97 = 91.8% |
+| verdict parse failures | 0/100 = 0.0% | 3/100 = 3.0% |
+| ECE | 0.0391 | 0.0623 |
+| per-task approvals of the planted bug | 0 on all ten | 0 on all ten |
+
+Every interval overlaps and no hypothesis changes verdict. **The headline
+reproduced: not one planted bug was approved, on either model, in 100
+opportunities.** False reds rose from 5 to 8, which the intervals do not
+separate; at this n it is not a difference, and it is not reported as one.
+
+### Generation arm, same story
+
+100 records, $0.3998 — *cheaper* than August's $0.5289 for the identical matrix,
+on 281,931 reasoning tokens against 381,819. Same served model, `deepseek-flash`.
+
+| | August (`deepseek-v4-flash`) | September (`deepseek-flash`) |
+|---|---|---|
+| baseline pass@1 | 49/50 = 98.0% [89.5, 99.6] | 50/50 = 100.0% [92.9, 100.0] |
+| baseline pass^5 | 9/10 = 90.0% | 10/10 = 100.0% |
+| self-verify pass@1 | 50/50 = 100.0% | 50/50 = 100.0% |
+| Δpass@1 | +2.00 pp | +0.00 pp |
+| cost multiplier | 1.64x | 1.75x |
+| wrong answers reaching the verifier | 0 | 0 |
+| truncation / parse failures | 0 / 0 | 0 / 0 |
+
+Every interval overlaps; every hypothesis keeps its verdict. The one baseline
+failure in August (T01, `parse_csv_line('') == ['']`) did not recur, which is
+what a single Bernoulli trial at p≈0.98 does. **The self-check again caught
+nothing, because nothing wrong again reached it** — at 1.75x the cost this time.
+
+### How the report now decides what to publish
+
+Selection used to be "newest file wins", which would have promoted an off-pin
+run to the headline the moment it landed. It is now two rules, in `pick.py`:
+the published run of each arm is the newest one served under the pinned id, and
+**every other run of that arm is passed in as a replication comparison**. A run
+on disk is therefore always named in the report — it can be contradicted, but
+not omitted. `tests/test_readme_numbers.py` asserts that every raw run present
+appears in the README by filename, and gate G4 names the runs it skipped.
+
+### What this round did not do
+
+No threshold was moved. The 2% parse-failure limit stands and the September
+injection run breaches it. The August runs remain the published result because
+they are the ones on the pinned model, not because their numbers are nicer —
+across both arms the numbers agree, and where they differ (false reds 5 vs 8,
+Δpass@1 +2.0 vs 0.0) the difference is inside the intervals and is reported as
+noise rather than as a finding.
+
+Total spend this round: **$0.6972** for 200 records and 250 API calls.

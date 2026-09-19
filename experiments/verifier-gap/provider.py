@@ -43,6 +43,14 @@ class CallResult:
     # much lower rate. Self-verify resends the generation prompt verbatim, so
     # this materially changes the H2 cost multiplier.
     cache_hit_tokens: int = 0
+    # The rest of the prompt: billed at the full input rate. Recorded rather
+    # than derived so a provider that reports it (DeepSeek does) is logged as
+    # reported, and one that does not falls back to input - hit explicitly.
+    cache_miss_tokens: int = 0
+    # Tokens written INTO a prompt cache this call. DeepSeek has no such
+    # concept (its cache is implicit and free to populate); Anthropic bills
+    # cache creation separately. Zero unless the provider reports it.
+    cache_write_tokens: int = 0
     # Reasoning tokens are billed as output but never appear in the text. On
     # DeepSeek v4 they dominate; tracking them separately keeps "the model
     # wrote nothing" distinguishable from "the model was cut off thinking".
@@ -101,14 +109,26 @@ class AnthropicProvider:
         latency = time.perf_counter() - t0
 
         text = "".join(b.text for b in response.content if b.type == "text")
+        usage = response.usage
+        # Anthropic reports the UNCACHED part as `input_tokens` and the cached
+        # parts beside it. `input_tokens` here is the whole prompt so the cost
+        # formula (miss = input - hit) means the same thing on every provider.
+        # Cache writes are recorded but priced at the miss rate: the config has
+        # no cache-write rate, and this experiment does not run on Anthropic.
+        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        uncached = usage.input_tokens
         return CallResult(
             text=text,
-            input_tokens=response.usage.input_tokens,
-            output_tokens=response.usage.output_tokens,
+            input_tokens=uncached + cache_read + cache_write,
+            output_tokens=usage.output_tokens,
             model=response.model,
             latency_s=latency,
             stop_reason=response.stop_reason,
             structured=structured,
+            cache_hit_tokens=cache_read,
+            cache_miss_tokens=uncached + cache_write,
+            cache_write_tokens=cache_write,
         )
 
 
@@ -187,7 +207,11 @@ class DeepSeekProvider:
             try:
                 response = self._request(payload, response_format)
             except Exception as exc:  # noqa: BLE001 - provider-specific error types
-                if "response_format" not in str(exc) and "invalid_request" not in str(exc):
+                # Only a rejected response_format is worth retrying in another
+                # mode. Anything else (402 insufficient balance, 401, 429) is
+                # the real error and must surface as itself, not as "every
+                # response_format attempt failed".
+                if "response_format" not in str(exc):
                     raise
                 last_exc = exc
                 continue
@@ -223,6 +247,9 @@ class DeepSeekProvider:
         details = getattr(usage, "completion_tokens_details", None)
         reasoning = getattr(details, "reasoning_tokens", 0) or 0
         cache_hit = getattr(usage, "prompt_cache_hit_tokens", 0) or 0
+        cache_miss = getattr(usage, "prompt_cache_miss_tokens", None)
+        if cache_miss is None:
+            cache_miss = max(0, usage.prompt_tokens - cache_hit)
         return CallResult(
             text=choice.message.content or "",
             input_tokens=usage.prompt_tokens,
@@ -232,6 +259,7 @@ class DeepSeekProvider:
             stop_reason=choice.finish_reason,
             structured=structured,
             cache_hit_tokens=cache_hit,
+            cache_miss_tokens=cache_miss,
             reasoning_tokens=reasoning,
             truncated=choice.finish_reason == "length",
         )
@@ -325,8 +353,8 @@ class MockProvider:
         return message, CallResult(
             text="", input_tokens=self._tokens(blob), output_tokens=out,
             model=f"{self.model}-mock", latency_s=0.0, stop_reason="tool_calls",
-            structured=False, cache_hit_tokens=0, reasoning_tokens=out // 2,
-            truncated=False,
+            structured=False, cache_hit_tokens=0, cache_miss_tokens=self._tokens(blob),
+            reasoning_tokens=out // 2, truncated=False,
         )
 
     def complete(
@@ -348,9 +376,10 @@ class MockProvider:
 
         prompt_chars = len(system) + sum(len(str(m["content"])) for m in messages)
         out_tokens = self._tokens(text)
+        in_tokens = self._tokens("x" * prompt_chars)
         return CallResult(
             text=text,
-            input_tokens=self._tokens("x" * prompt_chars),
+            input_tokens=in_tokens,
             output_tokens=out_tokens,
             model=f"{self.model}-mock",
             latency_s=0.0,
@@ -358,6 +387,7 @@ class MockProvider:
             structured=schema is not None,
             # Deterministic stand-ins so downstream code exercises these paths.
             cache_hit_tokens=0,
+            cache_miss_tokens=in_tokens,
             reasoning_tokens=out_tokens // 2,
             truncated=False,
         )

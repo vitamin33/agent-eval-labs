@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import hashlib
+
 import yaml
 
 HERE = Path(__file__).resolve().parent
@@ -63,6 +65,19 @@ class Config:
     max_truncation_rate: float
     temperature_unsupported_models: tuple[str, ...] = ()
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+    # Provenance of the run: which config file, and a digest of its exact
+    # bytes, so a results file can be tied to the configuration that made it.
+    path: str | None = None
+    sha256: str | None = None
+
+    def pricing_rates(self) -> dict[str, float]:
+        """The rate table the run was costed at, for embedding in each record."""
+        return {
+            "tier": self.pricing_tier,
+            "input_cache_miss_per_mtok": self.price_in_miss_per_mtok,
+            "input_cache_hit_per_mtok": self.price_in_hit_per_mtok,
+            "output_per_mtok": self.price_out_per_mtok,
+        }
 
     @property
     def supports_temperature(self) -> bool:
@@ -97,7 +112,8 @@ def load(path: str | Path = DEFAULT_CONFIG) -> Config:
     path = Path(path)
     if not path.exists():
         raise ConfigError(f"config not found: {path}")
-    data = yaml.safe_load(path.read_text()) or {}
+    raw_bytes = path.read_bytes()
+    data = yaml.safe_load(raw_bytes) or {}
 
     required = ["provider", "model", "max_tokens", "runs_per_cell", "modes", "seed", "pricing"]
     missing = [k for k in required if k not in data]
@@ -165,4 +181,6 @@ def load(path: str | Path = DEFAULT_CONFIG) -> Config:
         max_truncation_rate=float(thr.get("max_truncation_rate", 0.02)),
         temperature_unsupported_models=unsupported,
         raw=data,
+        path=str(path),
+        sha256=hashlib.sha256(raw_bytes).hexdigest(),
     )

@@ -48,6 +48,18 @@ WATCHED_BUILTINS = (
 # is what makes a rigged __eq__ or a lookalike wrapper fail to match.
 CONTAINERS = (list, tuple, dict, set, frozenset)
 
+# Captured at import, before any candidate code runs. The tamper report has to
+# be written with THESE, not with whatever the candidate left in `builtins`:
+# a rebound `sorted` or `getattr` would otherwise crash the report path itself,
+# and the verdict would arrive as an unrelated traceback (or, on 3.14, as no
+# verdict at all, because `traceback` uses `sorted` too).
+_ORIGINALS = {n: builtins.__dict__[n] for n in WATCHED_BUILTINS if n in builtins.__dict__}
+
+
+def _restore_builtins():
+    for n, v in _ORIGINALS.items():
+        builtins.__dict__[n] = v
+
 
 # --------------------------------------------------------------------------- #
 # canonical values
@@ -172,10 +184,14 @@ def main(out_path, nonce, payload):
             json.dump(kw, fh)
         sys.exit(0)
 
-    snapshot = {n: getattr(builtins, n) for n in WATCHED_BUILTINS if hasattr(builtins, n)}
-
     def tampered():
-        return [n for n, v in snapshot.items() if getattr(builtins, n, None) is not v]
+        # No builtin calls on this path: `builtins.__dict__` lookups and a list
+        # comprehension only. If anything was rebound, put the originals back
+        # BEFORE reporting, so the report is written by a working interpreter.
+        bad = [n for n, v in _ORIGINALS.items() if builtins.__dict__.get(n) is not v]
+        if bad:
+            _restore_builtins()
+        return bad
 
     visible = list(payload["asserts"])
     hidden = list(payload.get("hidden_asserts", []))
@@ -283,6 +299,8 @@ def _bootstrap():
     except SystemExit:
         raise
     except BaseException:
+        # The candidate may have left `builtins` unusable; `traceback` needs it.
+        _restore_builtins()
         try:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as fh:

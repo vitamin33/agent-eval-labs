@@ -33,7 +33,10 @@ from provider import VERDICT_SCHEMA, build_provider  # noqa: E402
 from tasks import load_tasks  # noqa: E402
 from verdict import parse_verdict  # noqa: E402
 
-SCHEMA_VERSION = 1
+# v2 (2026-09): per-call cost and cache miss/write tokens, max_tokens, the
+# pricing rates the run was costed at, and a digest of the config file. Every
+# reader accepts v1 records; the new fields are additive.
+SCHEMA_VERSION = 2
 RESULTS_DIR = HERE / "results"
 
 
@@ -41,14 +44,36 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _call_record(stage: str, result) -> dict:
-    """One API call's accounting. Cache and reasoning tokens are recorded
-    separately because both change what a token costs and what it bought."""
-    return {
+def _git_head() -> str | None:
+    """The harness commit a run was made with, when the repo is available."""
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["git", "-C", str(HERE), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip() or None if out.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _call_record(stage: str, result, cfg=None) -> dict:
+    """One API call's accounting, straight from the response's usage block.
+
+    Cache hit/miss/write and reasoning tokens are recorded separately because
+    each changes what a token costs and what it bought. `cost_usd` is this
+    call's share at the configured rates, so a per-call usage table can be
+    exported without re-deriving anything.
+    """
+    hit = getattr(result, "cache_hit_tokens", 0)
+    rec = {
         "stage": stage,
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
-        "cache_hit_tokens": getattr(result, "cache_hit_tokens", 0),
+        "cache_hit_tokens": hit,
+        "cache_miss_tokens": getattr(result, "cache_miss_tokens", None),
+        "cache_write_tokens": getattr(result, "cache_write_tokens", 0),
         "reasoning_tokens": getattr(result, "reasoning_tokens", 0),
         "latency_s": round(result.latency_s, 4),
         "stop_reason": result.stop_reason,
@@ -56,9 +81,15 @@ def _call_record(stage: str, result) -> dict:
         "structured": bool(getattr(result, "structured", False)),
         "model": result.model,
     }
+    if rec["cache_miss_tokens"] is None:
+        rec["cache_miss_tokens"] = max(0, result.input_tokens - hit)
+    if cfg is not None:
+        rec["cost_usd"] = round(cfg.cost_usd(result.input_tokens, result.output_tokens, hit), 8)
+    return rec
 
 
 INJECT_SOURCE = {"inject_wrong": "silent_failure", "inject_correct": "reference"}
+HARNESS_COMMIT = _git_head()
 
 
 def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
@@ -79,7 +110,7 @@ def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
         gen = provider.complete(
             prompts.SYSTEM, gen_messages, trace={**trace, "stage": "generation"}
         )
-        calls.append(_call_record("generation", gen))
+        calls.append(_call_record("generation", gen, cfg))
         answer = gen.text
 
     # The injected artifact's ground truth is asserted, not assumed: if a
@@ -108,7 +139,7 @@ def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
             },
         )
         verification_text = ver.text
-        calls.append(_call_record("verification", ver))
+        calls.append(_call_record("verification", ver, cfg))
         v = parse_verdict(ver.text, structured=ver.structured)
         if v.verdict == "wrong" and v.revised:
             grade_final = grade_completion(v.revised, task, timeout_s=cfg.grading_timeout_s)
@@ -123,6 +154,8 @@ def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
     in_tok = sum(c["input_tokens"] for c in calls)
     out_tok = sum(c["output_tokens"] for c in calls)
     hit_tok = sum(c.get("cache_hit_tokens", 0) for c in calls)
+    miss_tok = sum(c.get("cache_miss_tokens", 0) for c in calls)
+    write_tok = sum(c.get("cache_write_tokens", 0) for c in calls)
     reason_tok = sum(c.get("reasoning_tokens", 0) for c in calls)
     models = {c["model"] for c in calls}
 
@@ -140,7 +173,11 @@ def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
         "model_requested": cfg.model,
         "model_resolved": sorted(models)[0] if len(models) == 1 else "|".join(sorted(models)),
         "temperature": cfg.temperature,
+        "max_tokens": cfg.max_tokens,
         "seed": cfg.seed,
+        "pricing": cfg.pricing_rates(),
+        "config": {"path": cfg.path, "sha256": cfg.sha256},
+        "harness_commit": HARNESS_COMMIT,
         "prompts": {
             "system": prompts.SYSTEM,
             "generation": prompts.generation_prompt(task),
@@ -163,6 +200,8 @@ def run_record(provider, cfg, task: dict, mode: str, run_index: int) -> dict:
             "input": in_tok,
             "output": out_tok,
             "cache_hit": hit_tok,
+            "cache_miss": miss_tok,
+            "cache_write": write_tok,
             "reasoning": reason_tok,
         },
         "truncated": any(c.get("truncated") for c in calls),

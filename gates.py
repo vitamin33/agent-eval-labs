@@ -694,6 +694,30 @@ def read_records(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
+def served_off_pin(records: list[dict]) -> bool:
+    """True when the API served an id other than the one the run requested."""
+    real = [r for r in records if r.get("provider") != "mock"]
+    requested = {r.get("model_requested") for r in real if r.get("model_requested")}
+    served = {r.get("model_resolved") for r in real if r.get("model_resolved")}
+    return bool(served) and bool(requested) and bool(served - requested)
+
+
+def split_by_pin(files: list[Path]) -> tuple[list[Path], list[Path]]:
+    """(on the pinned model, off it) — the second list is never silently dropped.
+
+    The gate judges the run that is publishable, but naming what it skipped is
+    the whole point: a run that came back on a different model must not be able
+    to disappear by being ignored.
+    """
+    on, off = [], []
+    for f in files:
+        try:
+            (off if served_off_pin(read_records(f)) else on).append(f)
+        except (OSError, ValueError):
+            off.append(f)
+    return on, off
+
+
 def recompute_false_green_rate(records: list[dict]) -> tuple[int, int]:
     """Independent reimplementation of the headline metric.
 
@@ -740,7 +764,27 @@ def gate_g4() -> list[Check]:
     if not files:
         return checks
 
-    path = files[-1]
+    on_pin, off_pin = split_by_pin(files)
+    if off_pin:
+        checks.append(
+            Check(
+                "generation runs served off the pinned model, not counted as results: "
+                + ", ".join(f.name for f in off_pin),
+                True,
+                "",
+            )
+        )
+    checks.append(
+        Check(
+            "a generation run on the pinned model exists",
+            bool(on_pin),
+            f"every run was served a different model: {[f.name for f in off_pin]}",
+        )
+    )
+    if not on_pin:
+        return checks
+
+    path = on_pin[-1]
     records = read_records(path)
     checks.append(Check(f"{path.name}: 100 records", len(records) == 100, f"got {len(records)}"))
 
@@ -760,6 +804,21 @@ def gate_g4() -> list[Check]:
             f"single resolved model ({models[0] if models else '?'})",
             len(models) == 1,
             f"run spans multiple models: {models}",
+        )
+    )
+    # A run that is internally consistent can still be on the wrong model: the
+    # server may resolve the pinned id to something else and never say so. The
+    # September 2026 run asked for `deepseek-v4-flash` and was served
+    # `deepseek-flash`, and the check above passed. Pinning means the served id
+    # equals the requested one, so that is what is asserted.
+    requested = sorted({r.get("model_requested") for r in records})
+    mismatched = [m for m in models if m not in requested]
+    checks.append(
+        Check(
+            f"served model matches the pinned id ({requested[0] if len(requested) == 1 else requested})",
+            not mismatched,
+            f"config pinned {requested} but the API served {models}; the run is not on "
+            f"the pinned model and its numbers are not comparable to runs that are",
         )
     )
 
@@ -791,7 +850,16 @@ def gate_g4() -> list[Check]:
     p1 = k / n if n else None
     in_window = p1 is not None and lo <= p1 <= hi
 
-    inject_files = inject_result_files()
+    inject_files, inject_off_pin = split_by_pin(inject_result_files())
+    if inject_off_pin:
+        checks.append(
+            Check(
+                "injection runs served off the pinned model, not counted as results: "
+                + ", ".join(f.name for f in inject_off_pin),
+                True,
+                "",
+            )
+        )
     inject_records = read_records(inject_files[-1]) if inject_files else []
     n_wrong_shown = len(
         [r for r in inject_records if r.get("truth_initial") != "correct"]

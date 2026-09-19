@@ -5,7 +5,7 @@ PY := .venv/bin/python
 UV := $(shell command -v uv 2>/dev/null)
 
 DRY := build/reproduce-dry
-.PHONY: help venv test gates reproduce-dry run-live run-live-inject report clean
+.PHONY: help venv test gates reproduce-dry reproduce-live run-live run-live-inject report clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -34,16 +34,24 @@ reproduce-dry: .venv/bin/python ## full offline reproduction — no API key need
 	@echo "Reproduced offline into $(DRY)/ using MOCKED responses."
 	@echo "These numbers are synthetic. Real results require: make run-live"
 
+reproduce-live: .venv/bin/python ## the real experiment, end to end: both arms, report, gate G4 (~250 calls, ~$0.75, ~2.5h)
+	$(MAKE) run-live-inject
+	$(MAKE) run-live
+	$(MAKE) report
+	$(PY) gates.py --gate G4
+
 run-live: .venv/bin/python ## arm 1 — generation: baseline vs self-verify (~150 calls)
 	$(PY) experiments/verifier-gap/runner.py --live --arm generation
 
 run-live-inject: .venv/bin/python ## arm 2 — verify supplied answers (~100 calls)
 	$(PY) experiments/verifier-gap/runner.py --live --arm injection
 
-report: .venv/bin/python ## regenerate table + charts from the newest run of each arm
-	$(PY) experiments/verifier-gap/report.py \
-	    --results $$(ls -t experiments/verifier-gap/results/run-live-2*.jsonl | head -1) \
-	    --inject-results $$(ls -t experiments/verifier-gap/results/run-live-inject-*.jsonl | head -1)
+# The published run is the newest one the API served under the pinned model id;
+# every other run of the same arm is passed as a replication comparison, so a
+# run that exists can never be absent from the report. `pick.py` does the
+# selection and prints both, and refuses if no run is on the pin.
+report: .venv/bin/python ## regenerate tables, charts, cost and replication from the raw runs
+	$(PY) experiments/verifier-gap/report.py $$($(PY) experiments/verifier-gap/pick.py)
 
 .venv/bin/python:
 	@$(MAKE) venv

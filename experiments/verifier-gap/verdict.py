@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass
 
 _FENCE = re.compile(r"```(?:json)?\s*\r?\n(.*?)```", re.DOTALL)
-_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
+_DECODER = json.JSONDecoder()
 
 
 @dataclass(frozen=True)
@@ -57,6 +57,34 @@ def _coerce(obj: object, source: str) -> Verdict:
     return Verdict(v, conf, revised, source)
 
 
+def _scan_objects(text: str) -> list[dict]:
+    """Every complete JSON object in `text`, in order.
+
+    A reasoning model sometimes emits the required object, then second-guesses
+    itself in prose and emits it again ("Wait - the schema says JSON object
+    only"). The whole body is then not valid JSON, and a greedy `{.*}` match
+    spans from the first brace to the last and is not valid either, so a
+    perfectly clear verdict was being recorded as a parse failure. Scanning for
+    complete objects reads what the model actually emitted without guessing at
+    what it meant.
+    """
+    objects: list[dict] = []
+    i = 0
+    while i < len(text):
+        start = text.find("{", i)
+        if start == -1:
+            break
+        try:
+            obj, end = _DECODER.raw_decode(text[start:])
+        except ValueError:
+            i = start + 1
+            continue
+        if isinstance(obj, dict):
+            objects.append(obj)
+        i = start + end
+    return objects
+
+
 def parse_verdict(text: str, *, structured: bool) -> Verdict:
     """Parse a verification response into a verdict."""
     if not text or not text.strip():
@@ -75,11 +103,14 @@ def parse_verdict(text: str, *, structured: bool) -> Verdict:
         except ValueError:
             pass
 
-    obj = _OBJECT.search(text)
-    if obj:
-        try:
-            return _coerce(json.loads(obj.group(0)), "embedded_json")
-        except ValueError:
-            pass
+    # Complete objects embedded in prose. Several may be present; they must
+    # agree on the verdict, or this stays a parse failure rather than a guess.
+    candidates = [v for v in (_coerce(o, "embedded_json") for o in _scan_objects(text)) if v.parsed]
+    if candidates:
+        if len({v.verdict for v in candidates}) > 1:
+            return UNPARSED
+        # The last one is the model's final word, matching how `extract.py`
+        # chooses between several code fences.
+        return candidates[-1]
 
     return UNPARSED

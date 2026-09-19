@@ -26,8 +26,11 @@ ROOT = HERE.parent.parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+import config as config_mod  # noqa: E402
 import hypotheses  # noqa: E402
 import metrics  # noqa: E402
+import replicate  # noqa: E402
+import usage  # noqa: E402
 
 ASSETS = ROOT / "docs" / "assets"
 
@@ -472,6 +475,73 @@ def inject_readme(markdown: str, readme: Path) -> bool:
     return True
 
 
+def model_mismatch(records: list[dict]) -> tuple[list[str], list[str]] | None:
+    """(requested, served) when the API served something other than the pin.
+
+    A results file can be internally consistent and still not be on the model
+    the experiment pinned: the provider may resolve the requested id to another
+    one silently. Numbers from such a run are not comparable to runs that are on
+    the pin, so the report refuses to publish one by default.
+    """
+    # Mock output marks itself by suffixing the resolved id, which is a
+    # deliberate mismatch and is already stamped SYNTHETIC everywhere it
+    # appears. The pin is a claim about real runs.
+    real = [r for r in records if r.get("provider") != MOCK_PROVIDER]
+    if not real:
+        return None
+    requested = sorted({r.get("model_requested") for r in real if r.get("model_requested")})
+    served = sorted({r.get("model_resolved") for r in real if r.get("model_resolved")})
+    if served and requested and any(m not in requested for m in served):
+        return requested, served
+    return None
+
+
+def replication_markdown(gen_records, gen_path, gen_others,
+                         inj_records, inj_path, inj_others, k) -> str:
+    """Compare the published run of each arm against every other run of it.
+
+    The live API has no seed, so "reproducible" can only mean that a second
+    sample of the same matrix reaches the same conclusions. Every other run is
+    compared here, including ones that are not publishable — a run that exists
+    and is not named is exactly what this section prevents.
+    """
+    blocks: list[str] = []
+    for arm, published, pub_path, others in (
+        ("generation", gen_records, gen_path, gen_others),
+        ("injection", inj_records, inj_path, inj_others),
+    ):
+        if not others or not published:
+            continue
+        sa = metrics.summarize(published, k=k)
+        for other in others:
+            recs = metrics.load_records(other)
+            sb = metrics.summarize(recs, k=k)
+            table, agree = replicate.compare(
+                sa, sb, Path(pub_path).name, Path(other).name
+            )
+            mismatch = model_mismatch(recs)
+            note = ""
+            if mismatch:
+                requested, served = mismatch
+                note = (
+                    f"\n\n> This run is **not on the pinned model**: it requested "
+                    f"`{', '.join(requested)}` and the API served "
+                    f"`{', '.join(served)}`. It is published as raw data and is not "
+                    f"the result.\n"
+                )
+            verdict = (
+                "Every comparable figure agrees and no hypothesis changes verdict."
+                if agree else
+                "**A figure or a verdict moved between these runs.** Both stand; "
+                "neither is discarded."
+            )
+            blocks.append(
+                f"### {arm} arm — {Path(pub_path).name} vs {Path(other).name}"
+                f"{note}\n\n{table}\n\n{verdict}\n"
+            )
+    return "\n".join(blocks)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--results", required=True, help="generation-arm results .jsonl")
@@ -480,6 +550,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--assets", default=str(ASSETS))
     ap.add_argument("--readme", default=str(ROOT / "README.md"))
     ap.add_argument("--no-readme", action="store_true")
+    ap.add_argument("--config", default=str(config_mod.DEFAULT_CONFIG),
+                    help="rate table for v1 records that carry no pricing block")
+    ap.add_argument("--allow-model-mismatch", action="store_true",
+                    help="publish even though the API served a model other than the pinned id")
+    ap.add_argument("--replicate-gen", nargs="*", default=[],
+                    help="other generation-arm runs to compare against the published one")
+    ap.add_argument("--replicate-inject", nargs="*", default=[],
+                    help="other injection-arm runs to compare against the published one")
     args = ap.parse_args(argv)
 
     records = metrics.load_records(args.results)
@@ -489,10 +567,26 @@ def main(argv: list[str] | None = None) -> int:
     k = max(r["run_index"] for r in records) + 1
     gen_summary = metrics.summarize(records, k=k)
 
+    inj_records = []
     inj_summary = None
     if args.inject_results:
         inj_records = metrics.load_records(args.inject_results)
         inj_summary = metrics.summarize(inj_records, k=k)
+
+    # The pin has to hold before anything is published from the run.
+    for label, recs in (("generation", records), ("injection", inj_records)):
+        mismatch = model_mismatch(recs)
+        if mismatch and not args.allow_model_mismatch:
+            requested, served = mismatch
+            print(
+                f"refusing to publish the {label} arm: config pinned {requested} but the "
+                f"API served {served}. The run is not on the pinned model, so its numbers "
+                f"are not comparable to runs that are. Re-run against the pinned id, pin "
+                f"the id actually served, or pass --allow-model-mismatch to publish it "
+                f"with that stated.",
+                file=sys.stderr,
+            )
+            return 2
 
     summary = combined_summary(gen_summary, inj_summary)
 
@@ -501,12 +595,35 @@ def main(argv: list[str] | None = None) -> int:
     fig1 = chart_rates(summary, assets / "fig1_rates_by_mode.png")
     fig2 = chart_calibration(summary, assets / "fig2_calibration.png")
 
+    # Cost accounting and the per-call usage table come from the same raw
+    # records, at the run's own rates (v2) or the configured ones (v1).
+    rates = config_mod.load(args.config).pricing_rates()
+    cost_md = "\n\n## Cost accounting\n\n" + usage.cost_markdown(
+        usage.cost_accounting(records, rates), "generation", source
+    )
+    usage.write_csv(usage.flatten_calls(records, rates),
+                    Path(args.results).with_suffix(".usage.csv"))
+
     md = results_markdown(summary, source)
     if inj_summary is not None:
         md += (
             "\n\n## Arm 2 — injected verification\n\n"
             + injection_markdown(inj_summary, Path(args.inject_results).name)
         )
+        cost_md += "\n\n### Injection arm\n\n" + usage.cost_markdown(
+            usage.cost_accounting(inj_records, rates), "injection",
+            Path(args.inject_results).name,
+        )
+        usage.write_csv(usage.flatten_calls(inj_records, rates),
+                        Path(args.inject_results).with_suffix(".usage.csv"))
+    md += cost_md
+
+    rep_md = replication_markdown(
+        records, args.results, args.replicate_gen,
+        inj_records, args.inject_results, args.replicate_inject, k,
+    )
+    if rep_md:
+        md += "\n\n## Replication\n\n" + rep_md
     md += (
         "\n\n## Hypotheses\n\nEvery threshold was fixed in RESEARCH.md before "
         "any data was collected.\n\n"

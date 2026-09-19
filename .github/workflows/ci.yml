@@ -8,6 +8,13 @@ on:
 jobs:
   gates:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.14 is in the matrix because a grader defence broke on it and the
+        # 3.12-only job passed: the tamper report was built with the builtins
+        # the candidate had just rebound. See CALIBRATION.md round 4.
+        python-version: ["3.12", "3.14"]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -17,7 +24,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - name: Install
         run: |
           python -m venv .venv
