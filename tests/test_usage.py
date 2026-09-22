@@ -161,3 +161,17 @@ def test_live_injection_run_false_green_spend_is_zero_because_there_were_none():
     assert w["n_false_green"] == 0 and w["false_green_cost_usd"] == 0.0
     c = acc["by_mode"]["inject_correct"]
     assert c["n_false_red"] == 5 and c["false_red_cost_usd"] > 0
+
+
+@pytest.mark.skipif(not LIVE_INJ.exists(), reason="live results not present")
+def test_false_red_cost_ratio_is_reported_from_the_raw_records():
+    """A wrong verdict on a correct answer costs more than a right one: the
+    verifier reasons longest on the way to a false alarm. Published so a post
+    can cite the ratio and a test can hold it to the data."""
+    cfg = config_mod.load()
+    acc = usage.cost_accounting(metrics.load_records(LIVE_INJ), cfg.pricing_rates())
+    c = acc["by_mode"]["inject_correct"]
+    assert c["false_red_mean_reasoning_tokens"] > c["correct_verdict_mean_reasoning_tokens"]
+    assert c["false_red_cost_ratio"] > 1
+    md = usage.cost_markdown(acc, "injection", "x.jsonl")
+    assert "mean cost: correct verdict / false red" in md

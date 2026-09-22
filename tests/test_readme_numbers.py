@@ -98,3 +98,13 @@ def test_every_raw_run_on_disk_is_named_in_the_readme():
     assert runs, "no live runs on disk"
     missing = [f.name for f in runs if f.name not in md]
     assert not missing, f"raw runs present on disk but not named in the README: {missing}"
+
+
+def test_total_spend_and_record_count_across_every_live_run():
+    """The 'whole study' figure quoted in the README is a sum over every raw
+    file in both experiments, recomputed here."""
+    import json
+    files = sorted((ROOT / "experiments").glob("*/results/*.jsonl"))
+    rows = [json.loads(l) for f in files for l in f.read_text().splitlines() if l.strip()]
+    total = sum(r.get("cost_usd", 0.0) for r in rows)
+    assert f"{len(rows)} records for ${total:.2f} in model usage" in README.read_text()

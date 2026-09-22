@@ -164,7 +164,23 @@ def _mode_block(subset: list[dict], rows: list[dict]) -> dict:
         and r["truth_final"] == "correct"
     ]
     right_verdicts = [r for r in verified if r.get("verdict") == r["truth_initial"]]
+
+    def _mean(xs: list[float]) -> float | None:
+        return sum(xs) / len(xs) if xs else None
+
+    # What a wrong verdict costs relative to a right one, on the same inputs.
+    # The verifier reasons longest exactly when it is about to be wrong, and
+    # that shows up as tokens and dollars per record.
+    fr_reason = _mean([r["tokens"].get("reasoning", 0) for r in fr])
+    ok_reason = _mean([r["tokens"].get("reasoning", 0) for r in right_verdicts])
+    fr_cost = _mean([r["cost_usd"] for r in fr])
+    ok_cost = _mean([r["cost_usd"] for r in right_verdicts])
     return {
+        "false_red_mean_reasoning_tokens": fr_reason,
+        "correct_verdict_mean_reasoning_tokens": ok_reason,
+        "false_red_mean_cost_usd": fr_cost,
+        "correct_verdict_mean_cost_usd": ok_cost,
+        "false_red_cost_ratio": _div(fr_cost, ok_cost),
         "n_records": len(subset),
         "n_calls": len(my_rows),
         "cost_usd": cost,
@@ -287,6 +303,15 @@ def cost_markdown(acc: dict, arm: str, source: str) -> str:
         row("spend on false greens", lambda b: _usd(b["false_green_cost_usd"])),
         row("false reds (rejected, actually correct)", lambda b: _n(b["n_false_red"])),
         row("spend on false reds", lambda b: _usd(b["false_red_cost_usd"])),
+        row("mean reasoning tokens: correct verdict / false red",
+            lambda b: "n/a" if b["correct_verdict_mean_reasoning_tokens"] is None
+            else f"{b['correct_verdict_mean_reasoning_tokens']:,.0f} / "
+                 + ("n/a" if b["false_red_mean_reasoning_tokens"] is None
+                    else f"{b['false_red_mean_reasoning_tokens']:,.0f}")),
+        row("mean cost: correct verdict / false red",
+            lambda b: "n/a" if b["correct_verdict_mean_cost_usd"] is None
+            else f"{_usd(b['correct_verdict_mean_cost_usd'], 5)} / {_usd(b['false_red_mean_cost_usd'], 5)}"
+                 + ("" if b["false_red_cost_ratio"] is None else f" ({b['false_red_cost_ratio']:.1f}x)")),
         row("tokens: cache hit / miss / write",
             lambda b: f"{b['tokens']['cache_hit']:,} / {b['tokens']['cache_miss']:,} / "
                       f"{b['tokens']['cache_write']:,}"),
