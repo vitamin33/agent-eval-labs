@@ -56,5 +56,15 @@ report: .venv/bin/python ## regenerate tables, charts, cost and replication from
 .venv/bin/python:
 	@$(MAKE) venv
 
+post-check: .venv/bin/python ## publication gate for a post: make post-check POST=path/to/post.mdx [EXTRA=dir-of-other-posts]
+	@test -n "$(POST)" || { echo "usage: make post-check POST=path/to/post.mdx"; exit 2; }
+	$(PY) tools/post_check.py "$(POST)" $(if $(EXTRA),--extra "$(EXTRA)",)
+
+source-pack: .venv/bin/python ## every number a post may cite, from the published artifacts
+	@$(PY) tools/post_check.py --source-pack
+
+persona-prompt: ## print the six-persona read-through prompt for a subagent
+	@cat docs/templates/persona_round_prompt.md
+
 clean: ## remove caches and build output
 	rm -rf .pytest_cache **/__pycache__ __pycache__ build

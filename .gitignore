@@ -20,3 +20,6 @@ venv/
 # NOTE: experiments/*/results/*.json is raw experimental data and IS committed.
 .gate-dry.jsonl
 build/
+
+# drafts survive context compaction here; the scratchpad does not
+drafts/
