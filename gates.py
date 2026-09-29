@@ -1558,6 +1558,285 @@ def gate_g8() -> list[Check]:
 
 
 # --------------------------------------------------------------------------- #
+# G9 — experiment 3 substrate: answer-relevant injections, declared mode
+# differences, pre-registration before data, firing on the pilot
+# --------------------------------------------------------------------------- #
+
+EXP3 = ROOT / "experiments" / "agent-checkpoint"
+EXP3_TESTS = [
+    "tests/test_ckpt_env.py", "tests/test_ckpt_tasks.py", "tests/test_ckpt_relevance.py",
+    "tests/test_ckpt_prompt_diff.py", "tests/test_ckpt_agent.py", "tests/test_ckpt_metrics.py",
+    "tests/test_ckpt_hypotheses.py",
+]
+
+
+def _first_commit_ts(rel: str) -> str:
+    proc = run(["git", "log", "--reverse", "--format=%ct", "--", rel])
+    lines = proc.stdout.split()
+    return lines[0] if lines else ""
+
+
+def exp3_result_files(stage: int | None = None) -> list[Path]:
+    pattern = f"ckpt-stage{stage}-*.jsonl" if stage is not None else "ckpt-stage*.jsonl"
+    return sorted((EXP3 / "results").glob(pattern))
+
+
+@gate("G9", "Checkpoint substrate: every injection fires and changes the answer, "
+            "modes differ only as declared, design precedes data")
+def gate_g9() -> list[Check]:
+    checks: list[Check] = []
+    for rel in (
+        "experiments/agent-checkpoint/RESEARCH.md",
+        "experiments/agent-checkpoint/PLAN.md",
+        "experiments/agent-checkpoint/config.yaml",
+        "experiments/agent-checkpoint/ckpt_fixtures.py",
+        "experiments/agent-checkpoint/ckpt_env.py",
+        "experiments/agent-checkpoint/ckpt_tasks.py",
+        "experiments/agent-checkpoint/ckpt_prompts.py",
+        "experiments/agent-checkpoint/ckpt_agent.py",
+        "experiments/agent-checkpoint/relevance.py",
+    ):
+        checks.append(exists(rel, "file"))
+
+    def _run3(code: str) -> subprocess.CompletedProcess:
+        preamble = ("import sys; sys.path.insert(0, r'%s'); sys.path.insert(0, r'%s')\n"
+                    % (str(EXP3), str(EXP2)))
+        return subprocess.run([interpreter(), "-c", preamble + code],
+                              cwd=ROOT, capture_output=True, text=True, timeout=300)
+
+    proc = _run3(
+        "import ckpt_env;"
+        "a=ckpt_env.Env3.fresh().snapshot(); b=ckpt_env.Env3.fresh().snapshot();"
+        "assert a==b, (a,b);"
+        "e=ckpt_env.Env3.fresh(); before=e.snapshot(); e.set_status('O01','shipped');"
+        "assert e.snapshot()!=before;"
+        "bad=[(s,r) for s in (None,'pending','shipped','cancelled') for r in (None,'EU','US','APAC')"
+        " if e.count_orders(s,r)!=len(e.list_orders(s,r))]; assert not bad, bad;"
+        "r=e.reconcile('list_orders',{'status':'pending'});"
+        "assert r['source_of_record']==e.list_orders('pending');"
+        "print('substrate ok')"
+    )
+    checks.append(Check("environment deterministic, routes redundant, reconcile is the truth",
+                        "substrate ok" in proc.stdout, (proc.stdout + proc.stderr)[-300:]))
+
+    # --- every pair must fire on the obvious path AND change the answer ----- #
+    proc = run([interpreter(), str(EXP3 / "relevance.py")])
+    n_ok = re.search(r"(\d+)/(\d+) pairs answer-relevant", proc.stdout)
+    checks.append(Check(
+        f"every task/injection pair fires and changes the answer "
+        f"({n_ok.group(0) if n_ok else '?'})",
+        proc.returncode == 0 and bool(n_ok) and n_ok.group(1) == n_ok.group(2),
+        "an injection that fires and changes nothing measures nothing:\n"
+        + (proc.stdout + proc.stderr)[-600:],
+    ))
+
+    # --- the modes differ only as declared, and the substrate's own tests --- #
+    proc = run([interpreter(), "-m", "pytest", "-q", *EXP3_TESTS], timeout=600)
+    checks.append(Check("experiment 3 tests green (mode diff, planted false green, thresholds)",
+                        proc.returncode == 0, (proc.stdout + proc.stderr)[-600:]))
+
+    # --- pre-registration, not back-filled --------------------------------- #
+    research = EXP3 / "RESEARCH.md"
+    if research.exists():
+        md = research.read_text()
+        bodies = split_sections(section_body(md, "Hypotheses"), 3)
+        hyps = {k for k in bodies if re.match(r"^H\d+\b", k)}
+        checks.append(Check(f"experiment 3 hypotheses pre-registered: {len(hyps)}",
+                            len(hyps) >= 5, "expected at least 5"))
+        missing = [h for h in sorted(hyps) if "**Falsified if:**" not in bodies[h]]
+        checks.append(Check("every hypothesis can be falsified", not missing,
+                            f"no falsification condition: {missing}"))
+        unlabelled = [h for h in sorted(hyps) if "**Prediction:**" not in bodies[h]]
+        checks.append(Check("every hypothesis labels its numbers as predictions", not unlabelled,
+                            f"missing '- **Prediction:**': {unlabelled}"))
+        checks.append(Check("pre-registration has no Results section",
+                            not re.search(r"^## Results", md, re.MULTILINE),
+                            "findings belong in RESULTS.md, generated after the run"))
+        results = exp3_result_files()
+        if not results:
+            checks.append(Check("pre-registration precedes any data (none yet)", True, ""))
+        else:
+            design_t = _first_commit_ts("experiments/agent-checkpoint/RESEARCH.md")
+            data_t = _first_commit_ts(str(results[0].relative_to(ROOT)))
+            if not design_t:
+                checks.append(Check("pre-registration precedes the data", False,
+                                    "RESEARCH.md has no commit history"))
+            elif not data_t:
+                checks.append(Check("pre-registration precedes the data", True,
+                                    "results not yet committed"))
+            else:
+                checks.append(Check("pre-registration was committed before the data",
+                                    int(design_t) < int(data_t),
+                                    "the design must predate the results it predicts"))
+
+    # --- the firing check on the pilot: real trajectories, not a script ---- #
+    pilots = exp3_result_files(stage=0)
+    if not pilots:
+        checks.append(Check("firing check on the pilot (stage 0 not run yet)", True, ""))
+    else:
+        recs = read_records(pilots[-1])
+        live = [r for r in recs if r.get("provider") != "mock"]
+        proc = _run3(
+            "import json, relevance, ckpt_tasks;"
+            f"recs=[json.loads(l) for l in open(r'{pilots[-1]}') if l.strip()];"
+            "bad=[r['task_id'] for r in recs if r.get('mode')=='clean' and not "
+            "relevance.fires_on(r['steps'], ckpt_tasks.PRIMARY_KIND[r['task_id']])];"
+            "seen=sorted({r['task_id'] for r in recs});"
+            "print('FIRING', json.dumps({'bad': bad, 'seen': seen}))"
+        )
+        m = re.search(r"FIRING (\{.*\})", proc.stdout)
+        info = json.loads(m.group(1)) if m else {"bad": ["?"], "seen": []}
+        checks.append(Check(
+            f"{pilots[-1].name}: the injection fires on every task's recorded clean path "
+            f"({8 - len(info['bad'])}/8)",
+            bool(live) and not info["bad"] and len(info["seen"]) == 8,
+            f"would not fire on: {info['bad']}; tasks seen: {info['seen']}\n"
+            + (proc.stderr[-300:] if not m else ""),
+        ))
+        clean = [r for r in live if r.get("mode") == "clean"]
+        passed = sum(1 for r in clean if r.get("outcome_correct"))
+        checks.append(Check(f"pilot ceiling {passed}/{len(clean)} >= 70%",
+                            bool(clean) and passed / len(clean) >= 0.70,
+                            "tasks too hard; injected results would be confounded"))
+    return checks
+
+
+# --------------------------------------------------------------------------- #
+# G10 — experiment 3 run: on the pin, honest denominators, report matches
+# --------------------------------------------------------------------------- #
+
+
+@gate("G10", "Checkpoint run: served model on the pin, every injection fired, "
+             "report recomputed from the raw records", requires_live=True)
+def gate_g10() -> list[Check]:
+    checks: list[Check] = []
+    expected_for = {0: 8, 1: 64, 2: 160}
+    files = exp3_result_files()
+    checks.append(Check(f"trajectory results present ({len(files)} file(s))", bool(files),
+                        "no ckpt-stage*.jsonl"))
+    if not files:
+        return checks
+
+    complete = []
+    for f in files:
+        recs = read_records(f)
+        stage = recs[0].get("stage") if recs else None
+        if stage in (1, 2) and len(recs) == expected_for[stage]:
+            complete.append((f, recs))
+    checks.append(Check(f"a completed stage 1 or 2 exists ({len(complete)} of {len(files)} files)",
+                        bool(complete), "every matrix file is partial or a pilot"))
+    if not complete:
+        return checks
+
+    # Off-pin runs are named, never silently dropped or promoted.
+    off = [f.name for f, recs in complete
+           if {r.get("model_resolved") for r in recs} != {r.get("model_requested") for r in recs}]
+    on = [(f, recs) for f, recs in complete if f.name not in off]
+    if off:
+        checks.append(Check("runs served off the pinned model, not counted: " + ", ".join(off),
+                            True, ""))
+    checks.append(Check("a completed run on the pinned model exists", bool(on),
+                        f"every run was served a different model: {off}"))
+    if not on:
+        return checks
+
+    path, records = on[-1]
+    stage = records[0].get("stage")
+    checks.append(Check(f"{path.name}: {expected_for[stage]} trajectories (stage {stage})",
+                        len(records) == expected_for[stage], f"got {len(records)}"))
+    providers = sorted({r.get("provider") for r in records})
+    checks.append(Check("records come from the live provider", providers == ["deepseek"],
+                        f"providers: {providers} (mock output is not a result)"))
+    requested = sorted({r.get("model_requested") for r in records})
+    served = sorted({r.get("model_resolved") for r in records if r.get("model_resolved")})
+    checks.append(Check(f"served model matches the pinned id ({served})",
+                        len(served) == 1 and served == requested,
+                        f"config pinned {requested} but the API served {served}"))
+    checks.append(Check("every record is schema v2 with provenance",
+                        all(r.get("schema_version") == 2 and r.get("harness_commit")
+                            and (r.get("config") or {}).get("sha256") and r.get("pricing_tier")
+                            for r in records),
+                        "missing schema_version/harness_commit/config sha/pricing tier"))
+    missing = [r["trajectory_id"] for r in records if not r.get("tokens", {}).get("output", 0) > 0]
+    checks.append(Check("every trajectory has token counts", not missing, f"{missing[:5]}"))
+
+    clean = [r for r in records if r["mode"] == "clean"]
+    passed = sum(1 for r in clean if r["outcome_correct"])
+    checks.append(Check(f"clean ceiling {passed}/{len(clean)} >= 70%",
+                        bool(clean) and passed / len(clean) >= 0.70,
+                        "tasks too hard; injected results are confounded"))
+    capped = [r["trajectory_id"] for r in records if r.get("hit_step_cap")]
+    checks.append(Check(f"step-cap rate {len(capped) / len(records):.1%} <= 10%",
+                        len(capped) / len(records) <= 0.10, f"{capped[:5]}"))
+    trunc = [r["trajectory_id"] for r in records if r.get("truncated")]
+    checks.append(Check(f"truncation rate {len(trunc) / len(records):.1%} <= 2%",
+                        len(trunc) / len(records) <= 0.02, f"{trunc[:5]}"))
+
+    attempted = [r for r in records if r["mode"] in ("inject", "inject_tool", "inject_enforced")]
+    fired = [r for r in attempted if (r.get("injection") or {}).get("applicable")]
+    not_fired = [r["trajectory_id"] for r in attempted if r not in fired]
+    checks.append(Check("injection applicability is recorded on every injected trajectory",
+                        all("applicable" in (r.get("injection") or {}) for r in attempted),
+                        "a trajectory whose injection never fired is not a clean run"))
+    checks.append(Check(
+        f"the injection fired in every injected trajectory ({len(fired)}/{len(attempted)})",
+        len(fired) == len(attempted),
+        "Phase 0 required every pair to fire; these did not: " + ", ".join(not_fired[:8])))
+
+    # Independent recomputation of the headline, without importing the metrics.
+    def _silent(mode: str) -> tuple[int, int]:
+        sub = [r for r in fired if r["mode"] == mode]
+        return (sum(1 for r in sub if (not r["outcome_correct"]) and r["claims_success"]), len(sub))
+
+    results_md = EXP3 / "RESULTS.md"
+    checks.append(exists("experiments/agent-checkpoint/RESULTS.md", "file"))
+    if results_md.exists():
+        md = results_md.read_text()
+        checks.append(Check("report was generated from this run", path.name in md,
+                            f"RESULTS.md cites a different source than {path.name}"))
+        for mode in ("inject", "inject_tool", "inject_enforced"):
+            k, n = _silent(mode)
+            row = re.search(rf"^\| `{mode}` \|.*?\*\*([\d.]+)% \[[^\]]*\] \((\d+)/(\d+)\)\*\*",
+                            md, re.MULTILINE)
+            if not row:
+                checks.append(Check(f"silent failure rate for {mode} published", False,
+                                    "row not found in RESULTS.md"))
+                continue
+            pk, pn = int(row.group(2)), int(row.group(3))
+            pct = 100 * k / n if n else None
+            ok = (pk, pn) == (k, n) and pct is not None and abs(float(row.group(1)) - pct) < 0.05
+            checks.append(Check(
+                f"gate recomputes silent failure rate for {mode}: {k}/{n} "
+                f"(report says {pk}/{pn} = {row.group(1)}%)", ok,
+                "report disagrees with the raw records"))
+        checks.append(Check("stopping rule level is stated",
+                            ("99%" in md or "95%" in md) and "stopping rule" in md,
+                            "the report must name the level its verdicts were judged at"))
+
+    # Calibration, review, and the tests the review cites.
+    checks.append(exists("experiments/agent-checkpoint/CALIBRATION.md", "file"))
+    review = EXP3 / "REVIEW.md"
+    checks.append(exists("experiments/agent-checkpoint/REVIEW.md", "file"))
+    if review.exists():
+        md = review.read_text()
+        rows = re.findall(r"^\|\s*(A\d+)\s+.+?\|\s*\*\*(.+?)\*\*\s*\|\s*(.+?)\s*\|$",
+                          md, re.MULTILINE)
+        checks.append(Check(f"review rows found: {len(rows)}", len(rows) >= 8, "expected >= 8"))
+        allowed = {"FIXED", "CLEAR", "SCOPED", "ACCEPTED", "PENDING LIVE DATA"}
+        bad = [r[0] for r in rows if r[1].strip() not in allowed]
+        checks.append(Check("every risk has a known verdict", not bad, f"unknown verdicts: {bad}"))
+        nodes = [m.group(1) for r in rows if (m := re.search(r"`([^`]+::[^`]+)`", r[2]))]
+        if nodes:
+            proc = run([interpreter(), "-m", "pytest", "-q", *nodes])
+            checks.append(Check(f"all {len(nodes)} cited tests pass", proc.returncode == 0,
+                                (proc.stdout + proc.stderr).strip()[-500:]))
+        checks.append(Check("review states the threats it does not remove",
+                            "does not remove" in md.lower(), "missing residual-threats section"))
+    return checks
+
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 

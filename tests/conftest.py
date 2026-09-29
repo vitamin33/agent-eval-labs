@@ -10,8 +10,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 EXP = ROOT / "experiments" / "verifier-gap"
 EXP2 = ROOT / "experiments" / "agent-verifier-gap"
+EXP3 = ROOT / "experiments" / "agent-checkpoint"
 
-for p in (ROOT, EXP, EXP2):
+for p in (ROOT, EXP, EXP2, EXP3):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
