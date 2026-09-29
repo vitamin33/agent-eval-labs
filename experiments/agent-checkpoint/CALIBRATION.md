@@ -179,3 +179,76 @@ fixture or prompt changed.
 No threshold, no metric definition, no fixture, no injection. The T8 fix is a
 prompt-side format repair with its rationale above; stage 2 runs the full
 matrix as pre-registered, and H1 and H3 are judged there at 95%.
+
+## Stage 2 — k = 5
+
+`results/ckpt-stage2-20260929T145911Z.jsonl`, 160 trajectories, **$1.3901**.
+Projected at ~$1.10 before stage 1 and revised to ~$1.50 after it (the
+`inject_tool` arm is the expensive one); the revised estimate held. Served
+model `deepseek-flash` on every record, harness commit `ba661e1` on every
+record, all 120 injections fired, no step-cap hit, one truncated completion
+(`T7|inject_tool|1`, 0.6%, under the 2% threshold; graded wrong, kept).
+
+### Result, judged at 95%
+
+| | `inject` | `inject_tool` | `inject_enforced` |
+|---|---|---|---|
+| **silent failure rate** | **22/40 = 55.0%** [39.8, 69.3] | **6/40 = 15.0%** [7.1, 29.1] | **0/40 = 0.0%** [0.0, 8.8] |
+| outcome pass (fired) | 18/40 | 33/40 | 40/40 |
+| detection (T7 excluded) | 17/35 | 29/35 | 11/35 |
+| reconcile usage | – | 38/40 | – |
+| cost per trajectory | $0.00723 | $0.01399 (1.94x) | $0.00720 (1.00x) |
+
+**H1 supported, H2 falsified, H3 falsified, H4 supported, H5 supported.**
+Three predictions right, two wrong, and the two wrong ones are the same
+finding seen twice.
+
+### The two falsifications are one fact: given a tool, the agent uses it
+
+H2 predicted the agent would reconcile in fewer than half its trajectories.
+It reconciled in 38 of 40, and 371 of the arm's 952 tool calls were
+reconciliations. H3 predicted that voluntary use would leave the silent
+failure rate where it was; it fell from 55% to 15%. The pre-registered
+"will not use it" hypothesis was wrong, in stage 1 and again here.
+
+What survives of the prediction is the *shape* of the failures that remain.
+All six are on the two `wrong_field` tasks (T4: 4 of 5, T8: 2 of 5). In four
+of them the agent reconciled one to four things, none of them the corrupted
+customer; in the other two it reconciled nothing at all. The two
+trajectories in the whole arm that never called `reconcile` are both among
+the failures. Voluntary reconciliation is broad, expensive, and aimed by the
+agent's own sense of what might be wrong, which is exactly the sense that
+failed in the first place.
+
+### The enforced checkpoint cost nothing
+
+1.00x, to three decimals 0.997x. Every tool result carries the reconciled
+truth, and the arm's input tokens are still lower than `inject`'s (25,493
+against 26,582 per trajectory), because the agent stops re-deriving what it
+has been handed: on T5, 8.6 steps against 17.8; on T2, 12.8 against 15.4. The
+cost-per-avoided-silent-failure is therefore $0, and the report says so
+rather than printing a negative number.
+
+The checkpoint did not switch off the agent's own checking: in 11 of 35
+trajectories it still re-examined the corrupted subject after being shown
+the contradiction, most often on the mutating tasks T1 and T6.
+
+### Two things the baseline confirms from experiment 2
+
+- **Every wrong trajectory claimed success.** 22 of 22 in `inject`, on a
+  different model with corrected fixtures. Confidence on the 28 silent
+  failures across all arms ran 95 to 100.
+- **Detection implies recovery.** 17 of 17 detections in `inject` ended
+  correct. The failure is in noticing, never in fixing.
+
+### Determinism
+
+At temperature 0, every one of the 32 cells with repeats produced more than
+one distinct tool sequence across its five runs. k bought real variation.
+
+### What was not changed after seeing stage 2
+
+Nothing. The stopping rule was applied as written; H1 and H3 were the two
+hypotheses stage 1 left open, and both are decided here at 95%. The report
+change in this stage is cosmetic: a mode that removes failures at no extra
+spend now prints "$0 (no extra spend)" instead of "$-0.0000".

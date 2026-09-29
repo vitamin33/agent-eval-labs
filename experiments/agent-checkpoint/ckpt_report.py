@@ -31,6 +31,17 @@ def money(x: float | None, digits: int = 4) -> str:
     return "n/a" if x is None else f"${x:.{digits}f}"
 
 
+def avoided(b: dict) -> str:
+    """Extra spend per silent failure removed. A mode that removes failures
+    while costing no more than the baseline has nothing to divide."""
+    v = b["cost_per_avoided_silent_failure_usd"]
+    if v is None:
+        return "n/a (none avoided)"
+    if v <= 0:
+        return "$0 (no extra spend)"
+    return money(v, 4)
+
+
 def results_markdown(s: dict, results, source: str, level: str, stage: int | None) -> str:
     md = [
         f"# Results — agent-checkpoint, stage {stage if stage is not None else '?'}",
@@ -93,7 +104,7 @@ def results_markdown(s: dict, results, source: str, level: str, stage: int | Non
         b = s["by_mode"][m]
         md.append(f"| `{m}` | {money(b['cost_usd'])} | {money(b['mean_cost_usd'], 5)} | "
                   f"{money(b['cost_per_correct_usd'], 5)} | "
-                  f"{money(b['cost_per_avoided_silent_failure_usd'], 4) if m in ('inject_tool', 'inject_enforced') else '–'} |")
+                  f"{avoided(b) if m in ('inject_tool', 'inject_enforced') else '–'} |")
     md += [
         "",
         "Per avoided silent failure: (mean cost of the mode − mean cost of `inject`) / "

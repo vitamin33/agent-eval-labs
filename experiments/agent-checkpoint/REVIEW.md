@@ -29,6 +29,8 @@ vanish into a denominator of trajectories that were never really at risk.
 | A14 The cost multiplier of (c) is the wrapper's token bill, not the checkpoint's value | **SCOPED** | stated below |
 | A15 Temperature 0 makes k runs one run | **SCOPED** | reported as `cells whose repeats differ` in RESULTS.md |
 | A16 A simulated environment is not production | **ACCEPTED** | stated below |
+| A17 A malformed tool call by the agent ends the run instead of the trajectory | **FIXED** | `tests/test_ckpt_agent.py::test_a_malformed_tool_call_is_returned_to_the_agent_as_an_error` |
+| A18 T8's prompt asked for numbers and graded ids (format decided correctness) | **FIXED** | `tests/test_ckpt_tasks.py::test_t8_accepts_a_bare_order_number_but_not_a_wrong_one` |
 
 ---
 
@@ -91,6 +93,20 @@ would pay.
 
 Repeated runs of the same cell may be identical. RESULTS.md reports the share
 of cells whose repeats differ, so a reader can see how much k bought.
+
+## A17, A18 — what the live run found (**both were live**)
+
+Stage 2's first relaunch died when the agent, offered `reconcile(tool, args)`,
+called the plain `list_orders` with an `args` keyword: the environment raised
+`TypeError`, the loop caught only `ToolError`, and the process exited after 12
+trajectories. The agent's malformed call is part of its trajectory; it now
+receives `{"error": "bad arguments for list_orders: ..."}` and continues.
+
+Stage 1 graded both clean T8 trajectories wrong because the prompt's shape
+line, inherited from experiment 2, asked for "numbers" and the agent answered
+`1` for `O01`. Fixed before stage 2 as Amendment A2: the line asks for ids,
+and the check normalises a bare number to its id, with a test that a wrong
+number stays wrong. CALIBRATION.md carries both.
 
 ## What this review does not remove
 

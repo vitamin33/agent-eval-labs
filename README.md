@@ -130,9 +130,10 @@ make reproduce-dry
 
 The real thing. Both arms, the report, and the gate that recomputes a headline
 number from the raw records. About 250 calls, about $0.75, about 2.5 hours,
-most of it one task's reasoning. Everything published here, both experiments
-and the replication, is 680 records for $3.13 in model usage, summed over the
-raw files:
+most of it one task's reasoning. Experiments 1 and 2 with the replication were
+680 records for $3.13; everything published here, three experiments, the
+replication and the aborted partial runs, is
+933 records for $5.25 in model usage, summed over the raw files:
 
 ```bash
 cp .env.example .env && chmod 600 .env   # add DEEPSEEK_API_KEY
@@ -593,6 +594,75 @@ python gates.py --gate G7   # substrate
 python gates.py --gate G8   # the run
 ```
 
+## Experiment 3 — deterministic checkpoints at hand-off points
+
+Experiment 2 showed the failure: an agent given one silently wrong tool result
+finishes wrong and says "done", and a prompt telling it to double-check buys
+nothing. Experiment 3 measures the fix the flagship post tells teams to ship,
+a **deterministic checkpoint**: after a tool returns, re-run the same query
+against the source of truth and hand the agent both answers. Two ways to
+deploy it, against the same injected failures, in the same run:
+
+- **reconcile tool, voluntary** — the agent gets a `reconcile(tool, args)` tool
+  that returns the authoritative result. Whether to call it is its choice.
+- **checkpoint, enforced** — the harness reconciles after every tool call and
+  wraps the result as `{"result": ..., "checkpoint": {"source_of_record": ...}}`,
+  with one line in the system prompt saying the checkpoint is authoritative.
+
+The headline metric is the **silent failure rate**: of the trajectories where
+the injection fired, how many finished wrong *and* claimed success. That is
+the number a team pays for. Stage 2, 40 fired injections per arm, one model
+(`deepseek-flash`), $1.39:
+
+![Silent failures and cost by mode](docs/assets/checkpoint-silent-failures.png)
+
+| arm | silent failures | outcome correct | cost per trajectory |
+|---|---|---|---|
+| no checkpoint | **55.0%** [39.8%, 69.3%] (22 of 40) | 18 of 40 | $0.00723 (1.00x) |
+| reconcile tool, voluntary | **15.0%** [7.1%, 29.1%] (6 of 40) | 33 of 40 | $0.01399 (1.94x) |
+| checkpoint, enforced | **0.0%** [0.0%, 8.8%] (0 of 40) | 40 of 40 | $0.00720 (1.00x) |
+
+**What it means for a team.** Put the reconciliation in the harness, not in
+the agent's hands. Enforced, it removed every silent failure in 40 injected
+trajectories and cost the same as doing nothing, because an agent that is
+handed the truth stops re-deriving it and takes fewer steps. Given the same
+check as an optional tool, the agent *did* use it, in 38 of 40 trajectories,
+and doubled its own bill doing so, and still finished wrong-and-confident in
+6 of 40: it reconciled what was easy to reconcile, not what was wrong.
+
+**What it does not show.** One model, the successor of the one experiments 1
+and 2 ran on, so no number here replicates them; the baseline arm's 22 of 22
+wrong trajectories claiming success is the same *shape* as experiment 2's 45
+of 45, not the same measurement. Three injection kinds, one per task, on a
+synthetic environment where the source of truth is exact and free. The
+enforced arm's cost includes the wrapper on every call; a team that
+checkpoints only writes would pay less and catch less. Two of five
+pre-registered predictions were wrong, both the same way: the agent used the
+voluntary tool far more than predicted (H2, H3 falsified), and the remaining
+failures are all on the two tasks where the corruption was a customer's
+region, which the agent never chose to reconcile.
+
+Five hypotheses, fixed before data in
+[`RESEARCH.md`](experiments/agent-checkpoint/RESEARCH.md) and held by a test:
+H1, H4 and H5 supported, H2 and H3 falsified, all decided at the 95% level
+after a staged run with the same stopping rule as experiment 2. Every number
+above is recomputed from the raw records by `tests/test_ckpt_readme_numbers.py`.
+Results in [`RESULTS.md`](experiments/agent-checkpoint/RESULTS.md), the three
+harness defects the run found (two injections that could not change an
+answer, a prompt that asked for numbers and graded ids, a malformed tool call
+that crashed the loop) in
+[`CALIBRATION.md`](experiments/agent-checkpoint/CALIBRATION.md), the review in
+[`REVIEW.md`](experiments/agent-checkpoint/REVIEW.md). Whole experiment,
+pilot and both stages and three aborted partial starts kept on disk: $2.12.
+
+```bash
+python experiments/agent-checkpoint/relevance.py   # 8/8 pairs fire and change the answer
+python gates.py --gate G9    # substrate
+python gates.py --gate G10   # the run
+make ckpt-dry                # offline reproduction with the mock, synthetic numbers
+make ckpt-live STAGE=2       # the real matrix, 160 trajectories, ~$1.40
+```
+
 ## Repository layout
 
 ```
@@ -634,6 +704,20 @@ experiments/agent-verifier-gap/
   traj_hypotheses.py            the staged stopping rule
   report_agent.py               generates RESULTS.md
   results/                      append-only JSONL — raw trajectories
+experiments/agent-checkpoint/
+  RESEARCH.md                   pre-registration, five hypotheses, amendments A0–A2
+  PLAN.md                       tasks, budget arithmetic
+  REVIEW.md                     adversarial review, 18 risks with proofs
+  CALIBRATION.md                phase 0, pilot, both stages, the defects each found
+  RESULTS.md                    generated — do not edit
+  config.yaml                   pins deepseek-flash at the current Flash prices
+  ckpt_env.py / ckpt_fixtures.py  orderdesk + reconcile, fixtures per Amendment A1
+  ckpt_tasks.py                 8 tasks, naive solvers for the relevance gate
+  relevance.py                  every injection fires AND changes the answer
+  ckpt_prompts.py               the one prompt block and the one extra tool
+  ckpt_agent.py                 the loop: reconcile tool, enforced checkpoint
+  ckpt_runner.py / ckpt_report.py / ckpt_metrics.py / ckpt_hypotheses.py
+  results/                      append-only JSONL, incl. aborted-* partial starts
 tests/                          harness self-tests, incl. the adversarial suite
 ```
 
