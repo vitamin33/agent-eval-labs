@@ -1,0 +1,61 @@
+# Experiment 3 configuration. Loaded by ckpt_config.py into experiment 1's
+# Config dataclass so provider, pricing and cost accounting are shared code.
+
+# --- provider -------------------------------------------------------------- #
+provider: deepseek
+base_url: https://api.deepseek.com
+api_key_env: DEEPSEEK_API_KEY
+
+# The served id, checked on every record by gate G10. Experiments 1 and 2
+# pinned `deepseek-v4-flash`; on 2026-09-29 the API lists only `deepseek-flash`
+# and `deepseek-v4-pro`, and DeepSeek documents the old id as retired and
+# served by DeepSeek-V4.1-Flash. This experiment pins the new id and is not a
+# replication of experiment 2. See RESEARCH.md Amendment A0.
+model: deepseek-flash
+
+temperature: 0.0
+
+# Sized from experiment 2's stage-0 pilot: a tool decision costs ~290 output
+# tokens, ~85 of them reasoning. 8192 leaves 28x headroom; a truncated step
+# would look exactly like a step that failed to notice anything, so
+# truncation is gated at 2%.
+max_tokens: 8192
+
+# --- matrix ---------------------------------------------------------------- #
+modes:
+  - clean
+  - inject
+  - inject_tool
+  - inject_enforced
+
+stage_runs:
+  0: 1     # pilot: clean only
+  1: 2
+  2: 5
+
+step_cap: 12
+
+# Seeds the harness only (mock responses, ordering). The API has no seed.
+seed: 20260929
+
+# --- pricing (USD per 1M tokens, deepseek-flash, from the pricing page on
+# 2026-09-29) --------------------------------------------------------------- #
+# Peak is the conservative choice; off-peak is half. Costs are computed at the
+# declared tier from raw token counts so the metric does not depend on when
+# the run happened to execute.
+pricing:
+  tier: peak
+  peak:
+    input_cache_miss_per_mtok: 0.30
+    input_cache_hit_per_mtok: 0.006
+    output_per_mtok: 1.20
+  off_peak:
+    input_cache_miss_per_mtok: 0.15
+    input_cache_hit_per_mtok: 0.003
+    output_per_mtok: 0.60
+
+# --- harness health thresholds enforced by gate G10 ------------------------ #
+thresholds:
+  max_truncation_rate: 0.02
+  max_step_cap_rate: 0.10
+  clean_pass_rate_min: 0.70
