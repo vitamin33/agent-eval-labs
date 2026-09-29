@@ -29,7 +29,7 @@ import ckpt_prompts  # noqa: E402
 import inject as inject_mod  # noqa: E402
 
 SCHEMA_VERSION = 2
-INJECT_MODES = ("inject", "inject_tool", "inject_enforced")
+INJECT_MODES = ("inject", "inject_tool", "inject_enforced", "inject_wrapped")
 
 
 def run_trajectory(
@@ -170,7 +170,7 @@ def run_trajectory(
                         except inject_mod.InjectionNotApplicable:
                             pass  # recorded by fired_at staying None
                     payload = json.dumps(result)
-                    if mode == "inject_enforced":
+                    if mode in ckpt_prompts.WRAPPED_MODES:
                         cp = ckpt_env.checkpoint(e, name, args)
                         if cp is not None:
                             truth = cp["source_of_record"]
@@ -267,6 +267,7 @@ def run_trajectory(
         "tool_names": [t["function"]["name"] for t in tools],
         "steps": steps,
         "tokens": tok,
-        "cost_usd": round(cfg.cost_usd(tok["input"], tok["output"], tok["cache_hit"]), 8),
+        "cost_usd": round(cfg.cost_usd(tok["input"], tok["output"], tok["cache_hit"],
+                                       tok["cache_write"]), 8),
         "wall_clock_s": round(time.perf_counter() - t_start, 3),
     }

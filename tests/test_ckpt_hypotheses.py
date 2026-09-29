@@ -27,6 +27,10 @@ def sections():
         ("H3", "H3_silent_failure_min_tool", "35%"),
         ("H4", "H4_cost_multiplier_max_enforced", "1.5x"),
         ("H5", "H5_outcome_pass_min_enforced", "70%"),
+        ("H6", "H6_silent_failure_min_inject_other_model", "25%"),
+        ("H7", "H7_silent_failure_max_enforced_other_model", "25%"),
+        ("H8", "H8_silent_failure_max_wrapped_deepseek", "25%"),
+        ("H9", "H9_cost_multiplier_max_enforced_other_model", "1.5x"),
     ],
 )
 def test_code_thresholds_match_research_md(hid, key, needle):
@@ -48,7 +52,25 @@ def test_h4_interim_band_is_the_one_research_md_names():
 
 
 def test_every_research_hypothesis_is_evaluated():
-    assert {r.id for r in ch.evaluate([])} == set(sections())
+    other = [rec("inject", ok=False, run=i) for i in range(4)] + \
+            [rec("inject_enforced", ok=True, run=i) for i in range(4)]
+    for r in other:
+        r["model_requested"] = "claude-haiku-4-5"
+    wrapped = [dict(rec("inject_wrapped", ok=True, run=i), model_requested="deepseek-flash") for i in range(4)]
+    ids = ({r.id for r in ch.evaluate([])} | {r.id for r in ch.evaluate_replication(other)}
+           | {r.id for r in ch.evaluate_replication(wrapped)})
+    assert ids == set(sections())
+
+
+def test_replication_hypotheses_are_scoped_to_the_arms_present():
+    other = [dict(rec("inject", ok=False, run=i), model_requested="claude-haiku-4-5") for i in range(40)] + \
+            [dict(rec("inject_enforced", ok=True, run=i), model_requested="claude-haiku-4-5") for i in range(40)]
+    by = {r.id: r for r in ch.evaluate_replication(other, "99")}
+    assert set(by) == {"H6", "H7", "H9"}
+    assert by["H6"].verdict == ch.SUPPORTED and by["H7"].verdict == ch.SUPPORTED
+    wrapped = [dict(rec("inject_wrapped", ok=False, run=i), model_requested="deepseek-flash") for i in range(40)]
+    by = {r.id: r for r in ch.evaluate_replication(wrapped, "99")}
+    assert set(by) == {"H8"} and by["H8"].verdict == ch.FALSIFIED
 
 
 def test_research_md_has_no_results_section_and_labels_predictions():

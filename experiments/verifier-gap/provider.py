@@ -64,14 +64,21 @@ class AnthropicProvider:
 
     name = "anthropic"
 
-    def __init__(self, model: str, max_tokens: int, sampling: dict[str, Any]):
+    def __init__(self, model: str, max_tokens: int, sampling: dict[str, Any],
+                 thinking_budget: int | None = None):
         import anthropic  # imported here so dry-run works without the package
 
         self._anthropic = anthropic
-        self.client = anthropic.Anthropic()
+        self.client = anthropic.Anthropic(timeout=600.0, max_retries=3)
         self.model = model
         self.max_tokens = max_tokens
         self.sampling = sampling
+        # Extended thinking, if asked for. Thinking blocks must be replayed
+        # verbatim on the next turn, so raw assistant content is kept per turn
+        # (see `_raw_turns`) and re-attached when the loop's OpenAI-shaped
+        # history is translated back.
+        self.thinking_budget = thinking_budget
+        self._raw_turns: dict[str, list] = {}
 
     def complete(
         self,
@@ -129,6 +136,116 @@ class AnthropicProvider:
             cache_hit_tokens=cache_read,
             cache_miss_tokens=uncached + cache_write,
             cache_write_tokens=cache_write,
+        )
+
+    # --- tool calling ------------------------------------------------------ #
+    # The agent loop speaks the OpenAI chat shape (experiment 2 was written
+    # against DeepSeek). These translate it to the Messages API and back, so
+    # the loop, the records and the metrics are identical across providers.
+
+    @staticmethod
+    def to_anthropic_tools(tools: list[dict]) -> list[dict]:
+        return [
+            {"name": t["function"]["name"],
+             "description": t["function"].get("description", ""),
+             "input_schema": t["function"].get("parameters", {"type": "object", "properties": {}})}
+            for t in tools
+        ]
+
+    def to_anthropic_messages(self, messages: list[dict]) -> tuple[str, list[dict]]:
+        """(system, messages). Consecutive tool results are merged into one
+        user turn, as the API requires; an assistant turn whose raw blocks
+        were kept (thinking, text, tool_use) is replayed from them."""
+        system = ""
+        out: list[dict] = []
+        pending_results: list[dict] = []
+
+        def flush():
+            if pending_results:
+                out.append({"role": "user", "content": list(pending_results)})
+                pending_results.clear()
+
+        for m in messages:
+            role = m.get("role")
+            if role == "system":
+                system = m.get("content", "")
+            elif role == "user":
+                flush()
+                out.append({"role": "user", "content": m.get("content", "")})
+            elif role == "assistant":
+                flush()
+                calls = m.get("tool_calls") or []
+                key = calls[0]["id"] if calls else None
+                if key and key in self._raw_turns:
+                    out.append({"role": "assistant", "content": self._raw_turns[key]})
+                    continue
+                blocks: list[dict] = []
+                if m.get("content"):
+                    blocks.append({"type": "text", "text": m["content"]})
+                for c in calls:
+                    try:
+                        args = json.loads(c["function"].get("arguments") or "{}")
+                    except ValueError:
+                        args = {}
+                    blocks.append({"type": "tool_use", "id": c["id"],
+                                   "name": c["function"]["name"], "input": args})
+                out.append({"role": "assistant", "content": blocks or [{"type": "text", "text": ""}]})
+            elif role == "tool":
+                pending_results.append({"type": "tool_result",
+                                        "tool_use_id": m["tool_call_id"],
+                                        "content": m.get("content", "")})
+        flush()
+        return system, out
+
+    def chat_tools(self, messages: list[dict], tools: list[dict]) -> tuple[Any, CallResult]:
+        import types
+
+        system, msgs = self.to_anthropic_messages(messages)
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "system": system,
+            "messages": msgs,
+            "tools": self.to_anthropic_tools(tools),
+            # Auto-cache the longest stable prefix: tools + system + history.
+            "cache_control": {"type": "ephemeral"},
+            **self.sampling,
+        }
+        if self.thinking_budget:
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": int(self.thinking_budget)}
+        t0 = time.perf_counter()
+        response = self.client.messages.create(**kwargs)
+        latency = time.perf_counter() - t0
+
+        text = "".join(b.text for b in response.content if b.type == "text")
+        calls = []
+        for b in response.content:
+            if b.type == "tool_use":
+                calls.append(types.SimpleNamespace(
+                    id=b.id, type="function",
+                    function=types.SimpleNamespace(name=b.name, arguments=json.dumps(b.input))))
+        if calls:
+            # Keep the raw blocks so thinking and text are replayed exactly.
+            self._raw_turns[calls[0].id] = [b.model_dump(exclude_none=True) for b in response.content]
+        message = types.SimpleNamespace(content=text, tool_calls=calls)
+
+        usage = response.usage
+        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        uncached = usage.input_tokens
+        return message, CallResult(
+            text=text,
+            input_tokens=uncached + cache_read + cache_write,
+            output_tokens=usage.output_tokens,
+            model=response.model,
+            latency_s=latency,
+            stop_reason=response.stop_reason,
+            cache_hit_tokens=cache_read,
+            cache_miss_tokens=uncached + cache_write,
+            cache_write_tokens=cache_write,
+            # The Messages API bills thinking as output and does not itemise it.
+            reasoning_tokens=0,
+            truncated=response.stop_reason == "max_tokens",
         )
 
 
@@ -422,18 +539,33 @@ class MockProvider:
         )
 
 
+class OpenAICompatProvider(DeepSeekProvider):
+    """Any OpenAI-compatible chat endpoint (Gemini's, for one). Same code as
+    DeepSeek's; only the provider name recorded on each record differs, so a
+    run can never be mistaken for a DeepSeek run."""
+
+    def __init__(self, name, model, max_tokens, sampling, base_url, api_key):
+        super().__init__(model, max_tokens, sampling, base_url, api_key)
+        self.name = name
+
+
 def build_provider(cfg, *, dry_run: bool, tasks: dict):
     if dry_run:
         return MockProvider(
             cfg.model, cfg.max_tokens, cfg.sampling_params(), cfg.seed, tasks
         )
-    if cfg.provider == "deepseek":
+    if cfg.provider in ("deepseek", "gemini", "openai_compat"):
         key = os.environ.get(cfg.api_key_env or "DEEPSEEK_API_KEY")
         if not key:
             raise RuntimeError(
                 f"{cfg.api_key_env} is not set. Put it in .env (chmod 600) or export it."
             )
-        return DeepSeekProvider(
-            cfg.model, cfg.max_tokens, cfg.sampling_params(), cfg.base_url, key
+        if cfg.provider == "deepseek":
+            return DeepSeekProvider(
+                cfg.model, cfg.max_tokens, cfg.sampling_params(), cfg.base_url, key
+            )
+        return OpenAICompatProvider(
+            cfg.provider, cfg.model, cfg.max_tokens, cfg.sampling_params(), cfg.base_url, key
         )
-    return AnthropicProvider(cfg.model, cfg.max_tokens, cfg.sampling_params())
+    return AnthropicProvider(cfg.model, cfg.max_tokens, cfg.sampling_params(),
+                             thinking_budget=getattr(cfg, "thinking_budget", None))

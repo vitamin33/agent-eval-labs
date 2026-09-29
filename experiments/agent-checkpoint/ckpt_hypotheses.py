@@ -38,6 +38,11 @@ THRESHOLDS = {
     "H4_interim_band_low": 1.2,
     "H4_interim_band_high": 1.8,
     "H5_outcome_pass_min_enforced": 0.70,
+    # Stage 3/4: cross-model replication and the unexplained wrapper.
+    "H6_silent_failure_min_inject_other_model": 0.25,
+    "H7_silent_failure_max_enforced_other_model": 0.25,
+    "H8_silent_failure_max_wrapped_deepseek": 0.25,
+    "H9_cost_multiplier_max_enforced_other_model": 1.5,
 }
 
 
@@ -128,11 +133,49 @@ def evaluate(records: list[dict], level: str = "99") -> list[Result]:
     return out
 
 
-def to_markdown(results: list[Result], level: str) -> str:
+def evaluate_replication(records: list[dict], level: str = "99") -> list[Result]:
+    """H6-H9 on one stage-3/4 file: one model, arms per its config. A
+    hypothesis whose arm is absent from the file is UNDETERMINED, named."""
+    T = THRESHOLDS
+    out: list[Result] = []
+    requested = {str(r.get("model_requested") or "") for r in records}
+    is_deepseek = bool(requested) and all("deepseek" in m for m in requested)
+    modes = {r.get("mode") for r in records}
+
+    if not is_deepseek:
+        sf_a = cm.silent_failure_rate(records, "inject")
+        v, decided = _decide_rate(sf_a, ">=", T["H6_silent_failure_min_inject_other_model"], level)
+        out.append(Result("H6", "silent failure rate in inject >= 25% on this model", ">= 25%",
+                          _pct(sf_a, level), v, decided))
+        sf_c = cm.silent_failure_rate(records, "inject_enforced")
+        v, decided = _decide_rate(sf_c, "<", T["H7_silent_failure_max_enforced_other_model"], level)
+        out.append(Result("H7", "silent failure rate in inject_enforced < 25% on this model", "< 25%",
+                          _pct(sf_c, level), v, decided))
+        mult = cm.cost_multiplier(records, "inject_enforced")
+        if mult is None:
+            out.append(Result("H9", "cost multiplier inject_enforced / inject < 1.5x on this model",
+                              "< 1.5x", "insufficient data", UNDETERMINED, False))
+        else:
+            holds, _ = compare(mult, "<", T["H9_cost_multiplier_max_enforced_other_model"])
+            inside = T["H4_interim_band_low"] <= mult <= T["H4_interim_band_high"]
+            decided = level == "95" or not inside
+            out.append(Result("H9", "cost multiplier inject_enforced / inject < 1.5x on this model",
+                              "< 1.5x", f"{mult:.3f}x",
+                              (SUPPORTED if holds else FALSIFIED) if decided else UNDETERMINED, decided,
+                              note="same interim band as H4, [1.2, 1.8]"))
+    if "inject_wrapped" in modes:
+        sf_w = cm.silent_failure_rate(records, "inject_wrapped")
+        v, decided = _decide_rate(sf_w, "<", T["H8_silent_failure_max_wrapped_deepseek"], level)
+        out.append(Result("H8", "silent failure rate in inject_wrapped < 25% (DeepSeek, no prompt line)",
+                          "< 25%", _pct(sf_w, level), v, decided))
+    return out
+
+
+def to_markdown(results: list[Result], level: str, next_stage: int = 2) -> str:
     lines = [
         f"Judged at the **{level}%** level per the pre-registered stopping rule.",
         "",
-        "| Hypothesis | Claim | Threshold | Observed | Verdict | Continues to stage 2 |",
+        f"| Hypothesis | Claim | Threshold | Observed | Verdict | Continues to stage {next_stage} |",
         "|---|---|---|---|---|---|",
     ]
     for r in results:

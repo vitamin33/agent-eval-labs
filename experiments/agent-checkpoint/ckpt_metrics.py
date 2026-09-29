@@ -19,7 +19,7 @@ for _p in (HERE, HERE.parent / "verifier-gap"):
 
 from metrics import Rate, wilson  # noqa: E402,F401
 
-INJECT_MODES = ("inject", "inject_tool", "inject_enforced")
+INJECT_MODES = ("inject", "inject_tool", "inject_enforced", "inject_wrapped")
 MODES = ("clean",) + INJECT_MODES
 BASELINE = "inject"
 CONFOUND_CONTROL = "T7"

@@ -4,6 +4,8 @@ The declared differences, and nothing else:
 
 * `inject_tool`     = `inject` + one tool definition (`reconcile`)
 * `inject_enforced` = `inject` + one system-prompt block (CHECKPOINT_BLOCK)
+* `inject_wrapped`  = `inject`, byte for byte; the wrapper is applied to the
+                      tool results with no line explaining it (stage 3)
 
 A test reconstructs each from `inject` and asserts the residue is exactly
 that. The base system prompt and the base tool list are imported from
@@ -54,6 +56,9 @@ RECONCILE_TOOL = {
         },
     },
 }
+
+
+WRAPPED_MODES = ("inject_enforced", "inject_wrapped")
 
 
 def system_prompt(mode: str) -> str:

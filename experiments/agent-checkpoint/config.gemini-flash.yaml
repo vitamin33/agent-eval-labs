@@ -1,0 +1,40 @@
+# Stage 3/4 replication config: Gemini 3.8 Flash, the newest stable Flash
+# model on ai.google.dev/gemini-api/docs/models (read 2026-09-29), through
+# Google's OpenAI-compatible endpoint. The runner records the served id.
+provider: gemini
+base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+api_key_env: GEMINI_API_KEY
+model: gemini-3.8-flash
+tag: gemini-flash
+temperature: 0.0
+max_tokens: 8192
+
+modes:
+  - clean
+  - inject
+  - inject_enforced
+
+stage_runs:
+  0: 1
+  3: 2
+  4: 5
+
+step_cap: 12
+seed: 20260929
+
+# USD per 1M tokens, ai.google.dev/gemini-api/docs/pricing, page dated
+# 2026-09-24: gemini-3.8-flash input $0.75, output $3.75, context caching
+# $0.075 (rates valid through 2026-12-31). The OpenAI-compatible endpoint
+# reports no cache fields, so every input token is priced as a miss unless
+# the usage object says otherwise: a conservative overestimate.
+pricing:
+  tier: standard
+  standard:
+    input_cache_miss_per_mtok: 0.75
+    input_cache_hit_per_mtok: 0.075
+    output_per_mtok: 3.75
+
+thresholds:
+  max_truncation_rate: 0.02
+  max_step_cap_rate: 0.10
+  clean_pass_rate_min: 0.70

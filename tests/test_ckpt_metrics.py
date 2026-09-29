@@ -3,6 +3,7 @@ ratios, and a summary that renders from a dry run."""
 
 import pytest
 
+import ckpt_config
 import ckpt_metrics as cm
 import ckpt_runner
 
@@ -107,14 +108,14 @@ def dry_records(tmp_path_factory):
 
 def test_dry_run_has_the_full_stage_1_matrix(dry_records):
     assert len(dry_records) == 64
-    assert {r["mode"] for r in dry_records} == set(cm.MODES)
+    assert {r["mode"] for r in dry_records} == set(ckpt_config.MODES)
     assert all(r["provider"] == "mock" for r in dry_records)
 
 
 def test_summary_renders_from_a_dry_run(dry_records):
     s = cm.summarize(dry_records)
     assert s["n_trajectories"] == 64
-    assert set(s["by_mode"]) == set(cm.MODES)
+    assert set(s["by_mode"]) == set(ckpt_config.MODES)
     assert s["by_mode"]["inject_enforced"]["cost_multiplier"] is not None
     assert s["injection_not_applicable_rate"]["k"] == 0
     assert s["by_mode"]["inject_tool"]["silent_failure_rate"]["n"] == 16

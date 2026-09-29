@@ -1,0 +1,39 @@
+# Stage 3/4 on DeepSeek: the one new arm, `inject_wrapped` (the enforced
+# wrapper on every tool result, with NO prompt line naming the checkpoint),
+# run beside `inject` and `inject_enforced` in the same file so the three
+# are compared within one run. Everything else is config.yaml.
+provider: deepseek
+base_url: https://api.deepseek.com
+api_key_env: DEEPSEEK_API_KEY
+model: deepseek-flash
+tag: deepseek-wrapped
+temperature: 0.0
+max_tokens: 8192
+
+modes:
+  - inject
+  - inject_enforced
+  - inject_wrapped
+
+stage_runs:
+  3: 2
+  4: 5
+
+step_cap: 12
+seed: 20260929
+
+pricing:
+  tier: peak
+  peak:
+    input_cache_miss_per_mtok: 0.30
+    input_cache_hit_per_mtok: 0.006
+    output_per_mtok: 1.20
+  off_peak:
+    input_cache_miss_per_mtok: 0.15
+    input_cache_hit_per_mtok: 0.003
+    output_per_mtok: 0.60
+
+thresholds:
+  max_truncation_rate: 0.02
+  max_step_cap_rate: 0.10
+  clean_pass_rate_min: 0.70

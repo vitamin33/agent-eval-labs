@@ -342,3 +342,94 @@ and is kept on disk as `aborted-stage2-*.jsonl`, never counted, as are a
 1-trajectory start stopped for a tooling reason and a 12-trajectory start
 that crashed on a malformed tool call, a loop defect fixed as error handling
 (CALIBRATION.md, stage 1).
+
+## Stage 3 — cross-model replication, and the wrapper without its sentence
+
+**Status:** pre-registered on 2026-09-29, after stages 1 and 2 were complete
+and before any stage-3 data. Nothing below is edited to match results.
+
+### Why
+
+Stage 2 answered the question on one model. The first thing a team asks is
+whether "every wrong run claims success" and "the enforced checkpoint
+removes them" are properties of `deepseek-flash` or of tool-calling agents.
+One run of two arms on each additional model answers both: the `inject` arm
+is experiment 2's measurement, the `inject_enforced` arm is experiment 3's.
+
+A second question is cheaper and stays on DeepSeek. The enforced arm's
+instructions carry one line saying the checkpoint is authoritative. Take the
+line away, keep the wrapper: does the agent use a truth it was handed but
+not told about? If it does, the gap is access. If it does not, the gap is
+the instruction, and that is the deployable part.
+
+### Design
+
+- **Models.** Claude Haiku 4.5 (`claude-haiku-4-5`, Anthropic SDK, the
+  cheapest current Claude) and Gemini 3.8 Flash (`gemini-3.8-flash`, the
+  newest stable Flash, through Google's OpenAI-compatible endpoint). Each
+  runs `clean`, `inject` and `inject_enforced`. The loop, tasks, fixtures,
+  injections and prompts are byte-identical to stage 2; a test holds the
+  translation to and from the Anthropic message shape.
+- **DeepSeek.** One new arm, `inject_wrapped`: every tool result wrapped as
+  in `inject_enforced`, instructions byte-identical to `inject`. Run beside
+  `inject` and `inject_enforced` in the same file.
+- **Stages.** 3 is k = 2 per model, judged at 99%; 4 is k = 5, at 95%, only
+  for what 3 leaves undecided. Same stopping rule as before. A pilot of 8
+  clean trajectories precedes stage 3 on each new model, for the ceiling and
+  the firing check, as gate G9 requires.
+- **Thinking.** Off on Haiku (the deployment default; DeepSeek's reasoning
+  ran ~29 tokens per step, so parity is closer with it off). Recorded per
+  call either way.
+- **Prices.** Anthropic first-party rates on 2026-09-29: input $1.00, output
+  $5.00, cache read $0.10, cache write $1.25 per 1M tokens. Google's page
+  dated 2026-09-24: input $0.75, output $3.75, cache $0.075. Cache writes are
+  billed at the premium over the miss rate; an endpoint that reports no
+  cache fields is priced as all-miss, an overestimate.
+
+### Hypotheses
+
+Judged per model, each on its own file; a model's file that lacks an arm
+leaves that hypothesis UNDETERMINED and named.
+
+### H6 — the silent failure is not one model's
+
+- **Metric:** `silent_failure_rate` in `inject`, on each replicated model
+- **Threshold:** >= **25%**
+- **Falsified if:** the Wilson upper bound is below 0.25 on that model.
+- **Prediction:** 35–65% on both. Experiment 2 and stage 2 read 50% and 55%
+  on two DeepSeek versions.
+
+### H7 — the enforced checkpoint transfers
+
+- **Metric:** `silent_failure_rate` in `inject_enforced`, on each replicated model
+- **Threshold:** < **25%**
+- **Falsified if:** the Wilson lower bound is at or above 0.25 on that model.
+- **Prediction:** 0–15% on both.
+
+### H8 — the wrapper works without its sentence
+
+- **Metric:** `silent_failure_rate` in `inject_wrapped` on DeepSeek
+- **Threshold:** < **25%**
+- **Falsified if:** the Wilson lower bound is at or above 0.25.
+- **Prediction:** 5–25%. The field is named `source_of_record`; I expect the
+  name to do most of the sentence's work, and I am not confident.
+
+### H9 — the enforced checkpoint is cheap elsewhere too
+
+- **Metric:** `cost_multiplier` of `inject_enforced` over `inject`, per model
+- **Threshold:** < **1.5x**
+- **Falsified if:** the ratio is at or above 1.5 on that model. Same interim
+  band as H4, [1.2, 1.8].
+- **Prediction:** 0.9–1.3x. Anthropic bills cache writes; a model that takes
+  as many steps with the wrapper as without would land above 1.
+
+### Budget
+
+Per model at k = 5: 8 tasks × 3 arms × 5 = 120 trajectories plus 8 pilot.
+Stage 2 measured ~26,000 input tokens (78% cached) and ~4,500 output per
+trajectory. Haiku 4.5 at those volumes: about $0.03 per trajectory, $4 at
+k = 5, $1.30 at k = 2. Gemini 3.8 Flash: about $0.035 all-miss, $4.50 at
+k = 5. DeepSeek `inject_wrapped` beside the two existing arms: 120 × $0.007,
+under $1. Ceiling for the whole stage: **$10**. Keys for Anthropic and
+Google are not in this repository's `.env` at the time of writing; the run
+waits for them.

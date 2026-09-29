@@ -64,6 +64,10 @@ class Config:
     max_verdict_parse_failure_rate: float
     max_truncation_rate: float
     temperature_unsupported_models: tuple[str, ...] = ()
+    # Providers that bill cache writes separately (Anthropic). None means
+    # writes are priced at the miss rate, as every DeepSeek run was.
+    price_in_write_per_mtok: float | None = None
+    thinking_budget: int | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
     # Provenance of the run: which config file, and a digest of its exact
     # bytes, so a results file can be tied to the configuration that made it.
@@ -72,19 +76,23 @@ class Config:
 
     def pricing_rates(self) -> dict[str, float]:
         """The rate table the run was costed at, for embedding in each record."""
-        return {
+        rates = {
             "tier": self.pricing_tier,
             "input_cache_miss_per_mtok": self.price_in_miss_per_mtok,
             "input_cache_hit_per_mtok": self.price_in_hit_per_mtok,
             "output_per_mtok": self.price_out_per_mtok,
         }
+        if self.price_in_write_per_mtok is not None:
+            rates["input_cache_write_per_mtok"] = self.price_in_write_per_mtok
+        return rates
 
     @property
     def supports_temperature(self) -> bool:
         return self.model not in self.temperature_unsupported_models
 
     def cost_usd(
-        self, input_tokens: int, output_tokens: int, cache_hit_tokens: int = 0
+        self, input_tokens: int, output_tokens: int, cache_hit_tokens: int = 0,
+        cache_write_tokens: int = 0,
     ) -> float:
         """Cost of one call, in USD.
 
@@ -95,10 +103,17 @@ class Config:
         """
         hit = max(0, min(cache_hit_tokens, input_tokens))
         miss = input_tokens - hit
+        write_extra = 0.0
+        if self.price_in_write_per_mtok is not None:
+            # Writes are part of `miss` above; add only the premium over the
+            # miss rate so a provider without a write rate is unchanged.
+            write = max(0, min(cache_write_tokens, miss))
+            write_extra = write * (self.price_in_write_per_mtok - self.price_in_miss_per_mtok)
         return (
             miss * self.price_in_miss_per_mtok
             + hit * self.price_in_hit_per_mtok
             + output_tokens * self.price_out_per_mtok
+            + write_extra
         ) / 1_000_000
 
     def sampling_params(self) -> dict[str, Any]:

@@ -142,3 +142,13 @@ The pilot re-measures tokens per step before stage 1 commits.
 A second model. The harness keeps the model as a config field so a
 cross-model replication of `inject` and `inject_enforced` can run as a
 separate stage; that stage is planned, budgeted and pre-registered on its own.
+
+### P12 — stage 3, cross-model replication (pre-registered in RESEARCH.md)
+
+- **Deliverable:** `config.haiku45.yaml`, `config.gemini-flash.yaml`,
+  `config.stage3-deepseek.yaml`; Anthropic tool calling and a generic
+  OpenAI-compatible provider in `provider.py`; `inject_wrapped` arm.
+- **Acceptance:** the translation to and from the Anthropic message shape is
+  test-held; a dry run with each config completes; the per-model report
+  evaluates H6–H9 with their thresholds held against RESEARCH.md.
+- **Verify:** `.venv/bin/python -m pytest tests/test_provider_tools.py tests/test_ckpt_hypotheses.py -q && .venv/bin/python experiments/agent-checkpoint/ckpt_runner.py --dry-run --stage 3 --config experiments/agent-checkpoint/config.haiku45.yaml --out build/ckpt-dry-haiku.jsonl --quiet && .venv/bin/python experiments/agent-checkpoint/ckpt_report.py --results build/ckpt-dry-haiku.jsonl --out build/ckpt-dry-haiku-RESULTS.md`

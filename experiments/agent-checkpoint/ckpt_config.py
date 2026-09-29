@@ -23,6 +23,9 @@ from config import Config, ConfigError  # noqa: E402
 
 DEFAULT_CONFIG = HERE / "config.yaml"
 MODES = ("clean", "inject", "inject_tool", "inject_enforced")
+# Stage 3 adds one arm on DeepSeek only: the enforced wrapper WITHOUT the
+# prompt line that names the checkpoint as authoritative.
+ALL_MODES = MODES + ("inject_wrapped",)
 
 
 def load(path: str | Path = DEFAULT_CONFIG) -> Config:
@@ -36,11 +39,15 @@ def load(path: str | Path = DEFAULT_CONFIG) -> Config:
     missing = [k for k in required if k not in data]
     if missing:
         raise ConfigError(f"config missing required keys: {missing}")
-    if tuple(data["modes"]) != MODES:
-        raise ConfigError(f"modes must be exactly {list(MODES)}, got {data['modes']}")
+    modes = tuple(data["modes"])
+    unknown = [m for m in modes if m not in ALL_MODES]
+    if unknown or not modes:
+        raise ConfigError(f"modes must be a non-empty subset of {list(ALL_MODES)}, got {list(modes)}")
     provider = data["provider"]
-    if provider not in ("anthropic", "deepseek"):
+    if provider not in ("anthropic", "deepseek", "gemini", "openai_compat"):
         raise ConfigError(f"unknown provider {provider!r}")
+    if provider != "anthropic" and not data.get("base_url"):
+        raise ConfigError(f"provider {provider!r} needs a base_url")
 
     pricing = data["pricing"]
     tier = pricing.get("tier", "peak")
@@ -60,7 +67,7 @@ def load(path: str | Path = DEFAULT_CONFIG) -> Config:
         temperature=data.get("temperature"),
         max_tokens=int(data["max_tokens"]),
         runs_per_cell=int(max(int(v) for v in data["stage_runs"].values())),
-        modes=tuple(data["modes"]),
+        modes=modes,
         inject_modes=(),
         seed=int(data["seed"]),
         pricing_tier=tier,
@@ -73,6 +80,9 @@ def load(path: str | Path = DEFAULT_CONFIG) -> Config:
         max_verdict_parse_failure_rate=0.0,
         max_truncation_rate=float(thr.get("max_truncation_rate", 0.02)),
         temperature_unsupported_models=tuple(data.get("temperature_unsupported_models", [])),
+        price_in_write_per_mtok=(float(rates["input_cache_write_per_mtok"])
+                                 if "input_cache_write_per_mtok" in rates else None),
+        thinking_budget=(int(data["thinking_budget"]) if data.get("thinking_budget") else None),
         raw=data,
         path=str(path),
         sha256=hashlib.sha256(raw_bytes).hexdigest(),
@@ -94,3 +104,8 @@ def thresholds(cfg: Config) -> dict[str, float]:
         "max_step_cap_rate": float(thr.get("max_step_cap_rate", 0.10)),
         "clean_pass_rate_min": float(thr.get("clean_pass_rate_min", 0.70)),
     }
+
+
+def tag(cfg: Config) -> str:
+    """Short name for result files: config `tag`, else the model id."""
+    return str(cfg.raw.get("tag") or cfg.model).replace("/", "-")

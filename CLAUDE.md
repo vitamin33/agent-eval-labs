@@ -33,10 +33,11 @@ every other run is a named replication comparison, `pick.py`); cost
 accounting per task, per correct answer, per false green; report boring
 numbers plainly; the result counts only when it reproduces from scratch.
 
-Experiment 3 (`experiments/agent-checkpoint/`) tests deterministic checkpoints
-at hand-off points. Next candidate after it: a cross-model replication of
-its `inject` and `inject_enforced` arms (Claude Haiku 4.5, one Gemini Flash),
-pre-registered and budgeted on its own before any data.
+Experiment 3 (`experiments/agent-checkpoint/`) measured deterministic
+checkpoints at hand-off points; stages 1 and 2 are complete. Its stage 3, a
+cross-model replication (Claude Haiku 4.5, Gemini 3.8 Flash) plus the
+unexplained-wrapper arm on DeepSeek, is pre-registered in RESEARCH.md with
+its own configs and waits for `ANTHROPIC_API_KEY` and `GEMINI_API_KEY`.
 
 ## The publishing loop
 
