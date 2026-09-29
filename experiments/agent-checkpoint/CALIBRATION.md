@@ -252,3 +252,30 @@ Nothing. The stopping rule was applied as written; H1 and H3 were the two
 hypotheses stage 1 left open, and both are decided here at 95%. The report
 change in this stage is cosmetic: a mode that removes failures at no extra
 spend now prints "$0 (no extra spend)" instead of "$-0.0000".
+
+## Stage 3 on DeepSeek — the wrapper without its sentence, k = 2
+
+`results/ckpt-stage3-deepseek-wrapped-20260929T183420Z.jsonl`, 48
+trajectories, **$0.4247**, served `deepseek-flash`, harness `c663760`, all
+48 injections fired, one step-cap hit (`T1|inject|1`, which never submitted
+and is graded wrong and honest: the first wrong-but-honest trajectory in
+the whole experiment).
+
+| | `inject` | `inject_enforced` | `inject_wrapped` |
+|---|---|---|---|
+| silent failure rate | 7/16 = 43.8% | 0/16 = 0.0% | 2/16 = 12.5% |
+| outcome pass (fired) | 8/16 | 16/16 | 14/16 |
+| cost per trajectory | $0.00926 | $0.00615 (0.66x) | $0.01113 (1.20x) |
+
+**H8 is UNDETERMINED at 99%** (2 of 16; the interval reaches 44.5%) and
+continues to stage 4 at k = 5, as the rule says.
+
+Both wrapped failures are on T7, the task whose job is to report whether
+`count_orders` agrees with `list_orders`. Without the sentence saying the
+checkpoint is authoritative, the agent saw the corrupted list next to the
+true one and reported the disagreement as its finding, `pending: false`.
+That is a defensible reading of its instructions and a wrong answer to the
+task, and it is the kind of ambiguity the one prompt line removes. The
+enforced arm, with the line, stayed at 0 and ran at 0.66x, cheaper than in
+stage 2 (1.00x) because this baseline took 20.5 steps against 17.6 then.
+Both figures are on 16 trajectories and will be replaced by stage 4's.
