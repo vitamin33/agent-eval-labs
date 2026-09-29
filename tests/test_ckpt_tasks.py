@@ -72,3 +72,20 @@ def test_stale_is_not_used_by_any_task():
 def test_pair_is_answer_relevant_and_discoverable(task):
     out = relevance.check_pair(task)
     assert out["ok"], out["problems"]
+
+
+def test_t8_asks_for_order_ids_not_numbers():
+    """Stage 1 found the agent submitting "1" for "O01" because the shape line
+    said numbers. The task must ask for what it grades."""
+    task = ckpt_tasks.by_id("T8")
+    assert task["answer_shape"] == "id_mapping"
+    assert "order id" in ckpt_tasks.ANSWER_SHAPES[task["answer_shape"]]
+
+
+def test_t8_accepts_a_bare_order_number_but_not_a_wrong_one():
+    e = ckpt_env.Env3.fresh()
+    check = ckpt_tasks.by_id("T8")["check"]
+    assert check(e, {"EU": "1", "US": 5, "APAC": "11"})[0]
+    assert check(e, {"EU": "O01", "US": "O05", "APAC": "O11"})[0]
+    assert not check(e, {"EU": "3", "US": "5", "APAC": "11"})[0]
+    assert not check(e, {"EU": "01", "US": "5"})[0]

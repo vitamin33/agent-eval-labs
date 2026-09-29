@@ -5,7 +5,7 @@ PY := .venv/bin/python
 UV := $(shell command -v uv 2>/dev/null)
 
 DRY := build/reproduce-dry
-.PHONY: help venv test gates reproduce-dry reproduce-live run-live run-live-inject report clean
+.PHONY: help venv test gates reproduce-dry reproduce-live run-live run-live-inject report clean ckpt-dry ckpt-live ckpt-report
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -52,6 +52,22 @@ run-live-inject: .venv/bin/python ## arm 2 — verify supplied answers (~100 cal
 # selection and prints both, and refuses if no run is on the pin.
 report: .venv/bin/python ## regenerate tables, charts, cost and replication from the raw runs
 	$(PY) experiments/verifier-gap/report.py $$($(PY) experiments/verifier-gap/pick.py)
+
+# --- experiment 3: deterministic checkpoints -------------------------------- #
+ckpt-dry: .venv/bin/python ## exp3 offline: mock matrix + report into build/ (synthetic numbers)
+	@rm -f build/ckpt-dry.jsonl && mkdir -p build
+	$(PY) experiments/agent-checkpoint/ckpt_runner.py --dry-run --stage 1 --out build/ckpt-dry.jsonl --quiet
+	$(PY) experiments/agent-checkpoint/ckpt_report.py --results build/ckpt-dry.jsonl --out build/ckpt-dry-RESULTS.md
+	$(PY) experiments/agent-checkpoint/relevance.py
+
+ckpt-live: .venv/bin/python ## exp3 live stage: make ckpt-live STAGE=0|1|2 (0 = 8 clean, 1 = 64, 2 = 160 trajectories)
+	@test -n "$(STAGE)" || { echo "usage: make ckpt-live STAGE=0|1|2"; exit 2; }
+	$(PY) experiments/agent-checkpoint/ckpt_runner.py --live --stage $(STAGE)
+
+ckpt-report: .venv/bin/python ## exp3 RESULTS.md from the newest completed stage: make ckpt-report RESULTS=path LEVEL=99|95
+	@test -n "$(RESULTS)" || { echo "usage: make ckpt-report RESULTS=experiments/agent-checkpoint/results/<file>.jsonl [LEVEL=99|95]"; exit 2; }
+	$(PY) experiments/agent-checkpoint/ckpt_report.py --results "$(RESULTS)" --level $(or $(LEVEL),99)
+	$(PY) gates.py --gate G10
 
 .venv/bin/python:
 	@$(MAKE) venv

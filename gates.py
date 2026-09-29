@@ -1803,8 +1803,8 @@ def gate_g10() -> list[Check]:
                                     "row not found in RESULTS.md"))
                 continue
             pk, pn = int(row.group(2)), int(row.group(3))
-            pct = 100 * k / n if n else None
-            ok = (pk, pn) == (k, n) and pct is not None and abs(float(row.group(1)) - pct) < 0.05
+            pct = f"{100 * k / n:.1f}" if n else None
+            ok = (pk, pn) == (k, n) and pct is not None and row.group(1) == pct
             checks.append(Check(
                 f"gate recomputes silent failure rate for {mode}: {k}/{n} "
                 f"(report says {pk}/{pn} = {row.group(1)}%)", ok,

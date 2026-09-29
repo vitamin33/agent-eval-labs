@@ -33,7 +33,10 @@ every other run is a named replication comparison, `pick.py`); cost
 accounting per task, per correct answer, per false green; report boring
 numbers plainly; the result counts only when it reproduces from scratch.
 
-Next experiment: `docs/NEXT.md`.
+Experiment 3 (`experiments/agent-checkpoint/`) tests deterministic checkpoints
+at hand-off points. Next candidate after it: a cross-model replication of
+its `inject` and `inject_enforced` arms (Claude Haiku 4.5, one Gemini Flash),
+pre-registered and budgeted on its own before any data.
 
 ## The publishing loop
 

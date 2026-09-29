@@ -318,3 +318,24 @@ made before any data and proven by the answer-relevance gate:
   and a wrong region for C1 changes T8's answer.
 
 The environment, tools and task wording are otherwise experiment 2's.
+
+### A2 — T8's answer shape (after stage 1, before stage 2)
+
+**Reason.** T8 asks for an order id per region but inherited experiment 2's
+`mapping` answer shape, whose wording is "an object mapping string keys to
+numbers". The agent obeyed the wording: both clean T8 trajectories in stage
+1 submitted `1` for `O01` and were graded wrong on format. Experiment 2's
+rule R2 says ground truth must not depend on output format; this violated it
+from the prompt side.
+
+**Change.** T8 gets its own shape line, "an object mapping each region to one
+order id string", and its check normalises a bare order number to its id
+(`1` → `O01`), with a test that a wrong number stays wrong. No threshold, no
+metric, no fixture, no other task changed.
+
+**Effect on results.** Stage 1's verdicts are unchanged: H2, H4 and H5 do not
+read T8's clean outcome, and H1 and H3 continue to stage 2 as they would have
+anyway. The two affected trajectories are named in CALIBRATION.md with their
+re-graded outcome. Stage 2 runs with the corrected line. A stage-2 run that
+had started under the old line was stopped after 8 trajectories ($0.0181)
+and is kept on disk as `aborted-stage2-*.jsonl`, never counted.

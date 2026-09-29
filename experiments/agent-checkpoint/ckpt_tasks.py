@@ -42,6 +42,10 @@ ANSWER_SHAPES = {
     "order_id": "a single order id string, e.g. \"O07\"",
     "order_ids": "a list of order id strings, sorted",
     "mapping": "an object mapping string keys to numbers",
+    # Experiment 2 gave T8 the `mapping` shape, whose wording says "numbers";
+    # the agent obeyed and submitted "1" for "O01". Found at stage 1
+    # (CALIBRATION.md), fixed as Amendment A2 before stage 2.
+    "id_mapping": "an object mapping each region to one order id string, e.g. {\"EU\": \"O07\"}",
     "bool_mapping": "an object mapping each status to true or false",
 }
 
@@ -300,12 +304,24 @@ def _t8_expected():
     return {r: oid for r, (oid, _) in best.items()}
 
 
+def _order_id(value) -> str:
+    """Normalise a bare order number to its id: 1, "1", "01" -> "O01".
+
+    Grading tests the substance, not the presentation (experiment 2's R2). A
+    bare number is unambiguous here because ids are O01..O15, and a wrong
+    number stays wrong after normalisation."""
+    text = str(value).strip()
+    if text.isdigit():
+        return f"O{int(text):02d}"
+    return text
+
+
 def _t8_check(e, answer):
     answer = coerce(answer)
     exp = _t8_expected()
     if not isinstance(answer, dict):
         return False, f"answer {answer!r} is not an object"
-    got = {str(k): str(v) for k, v in answer.items()}
+    got = {str(k): _order_id(v) for k, v in answer.items()}
     return (got == exp, "" if got == exp else f"{got} != {exp}")
 
 
@@ -377,7 +393,7 @@ TASKS = [
         "mutating": False, "kind": inject.OMISSION,
     },
     {
-        "id": "T8", "name": "escalate", "answer_shape": "mapping",
+        "id": "T8", "name": "escalate", "answer_shape": "id_mapping",
         "goal": ("Submit an object mapping each region to the id of its single largest "
                  "pending order by total. Orders whose customer does not exist have no "
                  "region and must be excluded."),
