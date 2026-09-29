@@ -279,3 +279,50 @@ task, and it is the kind of ambiguity the one prompt line removes. The
 enforced arm, with the line, stayed at 0 and ran at 0.66x, cheaper than in
 stage 2 (1.00x) because this baseline took 20.5 steps against 17.6 then.
 Both figures are on 16 trajectories and will be replaced by stage 4's.
+
+## Stage 4 on DeepSeek — the wrapper without its sentence, k = 5
+
+`results/ckpt-stage4-deepseek-wrapped-20260929T184151Z.jsonl`, 120
+trajectories, **$1.1282**, served `deepseek-flash`, harness `6ea4780`, all
+120 injections fired, no step-cap hit, no truncation.
+
+| | `inject` | `inject_enforced` | `inject_wrapped` |
+|---|---|---|---|
+| silent failure rate | 20/40 = 50.0% [35.2, 64.8] | 0/40 = 0.0% [0.0, 8.8] | 4/40 = 10.0% [4.0, 23.1] |
+| outcome pass (fired) | 20/40 | 40/40 | 36/40 |
+| mean steps | 18.9 | 14.9 | 19.3 |
+| input tokens per trajectory | 30,709 | 24,500 | 35,911 |
+| cost per trajectory | $0.00819 | $0.00706 (0.86x) | $0.01295 (1.58x) |
+
+**H8 supported at 95%**: 4 of 40, upper bound 23.1%, below the 25%
+threshold. The prediction (5–25%) held.
+
+### What the sentence does
+
+Handed the truth next to every tool result with no explanation of what it
+is, the agent still used it on seven of the eight tasks: 36 of 40 correct,
+against 20 of 40 with no checkpoint. All four failures are on T7, the task
+whose job is to report whether two counts agree. There the agent saw the
+corrupted list beside the true one and reported the disagreement it had
+been shown, `pending: false`, in all four wrong runs. Without the sentence
+the checkpoint is evidence; with it, the checkpoint is the answer. On the
+one task where "the two disagree" is itself an answer, that distinction is
+the whole result.
+
+The sentence is also what makes the checkpoint free. Without it the agent
+does not stop re-deriving: 19.3 steps against 14.9 with the sentence, and
+the largest input per trajectory of the three arms, 35,911 tokens, because
+every step carries the doubled results and the agent keeps reading. 1.58x
+against 0.86x. The access to the truth removes most of the failures; the
+one line removes the rest and pays for itself.
+
+### The baseline, a third time
+
+20 of 40 silent failures, and 20 of 20 wrong trajectories claiming success.
+Stage 2 read 22 of 40 and 22 of 22, experiment 2 read 45 of 45. Three runs,
+two model versions, the same shape each time.
+
+### What was not changed after seeing stage 4
+
+Nothing. H8's threshold and prediction are the ones committed before stage
+3 ran; the stopping rule was applied as written.

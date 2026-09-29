@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
 RESULTS_DIR = ROOT / "experiments/agent-checkpoint/results"
 STAGE2 = RESULTS_DIR / "ckpt-stage2-20260929T145911Z.jsonl"
+STAGE4 = RESULTS_DIR / "ckpt-stage4-deepseek-wrapped-20260929T184151Z.jsonl"
 
 pytestmark = pytest.mark.skipif(not STAGE2.exists(), reason="live results absent")
 
@@ -82,7 +83,7 @@ def test_whole_experiment_spend_includes_aborted_starts(data):
     assert any(f.name.startswith("aborted-") for f in files)
     total = sum(json.loads(l).get("cost_usd", 0.0) for f in files
                 for l in f.read_text().splitlines() if l.strip())
-    assert f"kept on disk: ${total:.2f}." in data["md"]
+    assert f"starts kept on disk: ${total:.2f}." in data["md"]
 
 
 def test_every_raw_exp3_file_is_named_somewhere():
@@ -94,3 +95,30 @@ def test_every_raw_exp3_file_is_named_somewhere():
 def test_results_md_is_from_the_published_file():
     md = (ROOT / "experiments/agent-checkpoint/RESULTS.md").read_text()
     assert STAGE2.name in md and "**95%**" in md
+
+
+@pytest.mark.skipif(not STAGE4.exists(), reason="stage 4 absent")
+@pytest.mark.parametrize("mode", ["inject", "inject_wrapped", "inject_enforced"])
+def test_wrapper_follow_up_rows_match(mode):
+    recs = cm.load(STAGE4)
+    assert len(recs) == 120
+    s = cm.summarize(recs)
+    text = README.read_text()
+    md = text[text.index("**And without the sentence?**"):text.index("Five hypotheses, fixed before data")]
+    b = s["by_mode"][mode]
+    assert _pct_ci(b["silent_failure_rate"]) in md, mode
+    p = b["outcome_pass_rate_fired"]
+    assert f"| {p['k']} of {p['n']} |" in md, mode
+    mult = 1.0 if mode == "inject" else b["cost_multiplier"]
+    assert f"${b['mean_cost_usd']:.5f} ({mult:.2f}x)" in md, mode
+    if mode == "inject_wrapped":
+        assert {r["task_id"] for r in recs if r["mode"] == mode and r["silent_failure"]} == {"T7"}
+        assert f"{b['mean_steps']} steps against {s['by_mode']['inject_enforced']['mean_steps']}" in md
+
+
+@pytest.mark.skipif(not STAGE4.exists(), reason="stage 4 absent")
+def test_h8_verdict_is_the_one_stated():
+    import ckpt_hypotheses as ch
+    by = {r.id: r for r in ch.evaluate_replication(cm.load(STAGE4), "95")}
+    assert by["H8"].verdict == "SUPPORTED"
+    assert "H8 (the wrapper without its sentence stays under 25%) supported" in README.read_text()

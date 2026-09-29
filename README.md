@@ -133,7 +133,7 @@ number from the raw records. About 250 calls, about $0.75, about 2.5 hours,
 most of it one task's reasoning. Experiments 1 and 2 with the replication were
 680 records for $3.13; everything published here, three experiments, the
 replication and the aborted partial runs, is
-933 records for $5.25 in model usage, summed over the raw files:
+1101 records for $6.80 in model usage, summed over the raw files:
 
 ```bash
 cp .env.example .env && chmod 600 .env   # add DEEPSEEK_API_KEY
@@ -642,10 +642,30 @@ voluntary tool far more than predicted (H2, H3 falsified), and the remaining
 failures are all on the two tasks where the corruption was a customer's
 region, which the agent never chose to reconcile.
 
+**And without the sentence?** The enforced arm's instructions carry one line
+saying the checkpoint is authoritative. A pre-registered follow-up on the
+same model ran the wrapper with that line removed, beside the two arms above,
+40 fired injections each:
+
+| arm | silent failures | outcome correct | cost per trajectory |
+|---|---|---|---|
+| no checkpoint | **50.0%** [35.2%, 64.8%] (20 of 40) | 20 of 40 | $0.00819 (1.00x) |
+| wrapper, no sentence | **10.0%** [4.0%, 23.1%] (4 of 40) | 36 of 40 | $0.01295 (1.58x) |
+| checkpoint, enforced | **0.0%** [0.0%, 8.8%] (0 of 40) | 40 of 40 | $0.00706 (0.86x) |
+
+Handed the truth with no explanation, the agent used it on seven of eight
+tasks. All 4 remaining failures are on the one task whose job is to report
+whether two counts agree: shown the corrupted list beside the true one, it
+reported the disagreement. Without the sentence the checkpoint is evidence;
+with it, the checkpoint is the answer. The sentence is also what makes the
+checkpoint free: without it the agent keeps re-deriving,
+19.3 steps against 14.9, and pays 1.58x instead of 0.86x.
+
 Five hypotheses, fixed before data in
 [`RESEARCH.md`](experiments/agent-checkpoint/RESEARCH.md) and held by a test:
 H1, H4 and H5 supported, H2 and H3 falsified, all decided at the 95% level
-after a staged run with the same stopping rule as experiment 2. Every number
+after a staged run with the same stopping rule as experiment 2; the
+follow-up's H8 (the wrapper without its sentence stays under 25%) supported. Every number
 above is recomputed from the raw records by `tests/test_ckpt_readme_numbers.py`.
 Results in [`RESULTS.md`](experiments/agent-checkpoint/RESULTS.md), the three
 harness defects the run found (two injections that could not change an
@@ -653,7 +673,8 @@ answer, a prompt that asked for numbers and graded ids, a malformed tool call
 that crashed the loop) in
 [`CALIBRATION.md`](experiments/agent-checkpoint/CALIBRATION.md), the review in
 [`REVIEW.md`](experiments/agent-checkpoint/REVIEW.md). Whole experiment,
-pilot and both stages and three aborted partial starts kept on disk: $2.12.
+pilot, both stages, the follow-up's two stages and three aborted partial
+starts kept on disk: $3.67.
 
 ```bash
 python experiments/agent-checkpoint/relevance.py   # 8/8 pairs fire and change the answer
