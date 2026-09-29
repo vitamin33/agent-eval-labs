@@ -20,9 +20,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-for p in (ROOT / "experiments" / "verifier-gap", ROOT / "experiments" / "agent-verifier-gap"):
+for p in (ROOT / "experiments" / "verifier-gap", ROOT / "experiments" / "agent-verifier-gap",
+          ROOT / "experiments" / "agent-checkpoint"):
     sys.path.insert(0, str(p))
 
+import ckpt_metrics as cm  # noqa: E402
 import metrics  # noqa: E402
 import traj_metrics as tm  # noqa: E402
 from metrics import wilson  # noqa: E402
@@ -39,6 +41,18 @@ C_WARN = "#e66767"
 EXP1_GEN = ROOT / "experiments/verifier-gap/results/run-live-20260819T190057Z.jsonl"
 EXP1_INJ = ROOT / "experiments/verifier-gap/results/run-live-inject-20260820T082818Z.jsonl"
 EXP2_S2 = ROOT / "experiments/agent-verifier-gap/results/traj-stage2-20260901T171546Z.jsonl"
+C_THREE = "#3fb27f"  # green, slot 3 dark step
+
+
+def exp3_published() -> Path:
+    """The newest complete stage-2 file of experiment 3 (160 records), else
+    the newest complete stage-1 file. Aborted partials are never chosen."""
+    d = ROOT / "experiments/agent-checkpoint/results"
+    for stage, n in ((2, 160), (1, 64)):
+        for f in sorted(d.glob(f"ckpt-stage{stage}-*.jsonl"), reverse=True):
+            if sum(1 for line in f.read_text().splitlines() if line.strip()) == n:
+                return f
+    raise FileNotFoundError("no complete experiment 3 stage file")
 
 ORIG_RECHECK = {
     "omission": {"count_orders", "list_orders"},
@@ -208,6 +222,48 @@ def chart_position_trap(out: Path):
     save(fig, out / "position-trap.png")
 
 
+# --------------------------------------------------------------------------- #
+# A5 — experiment 3: silent failures and cost by mode
+# --------------------------------------------------------------------------- #
+
+def chart_checkpoint(out: Path):
+    path = exp3_published()
+    recs = cm.load(path)
+    modes = [("inject", "no checkpoint", C_WARN), ("inject_tool", "reconcile tool,\nvoluntary", C_TWO),
+             ("inject_enforced", "checkpoint,\nenforced", C_THREE)]
+    fig, axes = plt.subplots(1, 2, figsize=(9.2, 4.0), gridspec_kw={"width_ratios": [1.15, 1]})
+    ax = axes[0]
+    style(ax)
+    for i, (m, label, color) in enumerate(modes):
+        r = cm.silent_failure_rate(recs, m)
+        bar_with_ci(ax, i, r.numerator, r.denominator, color, width=0.55)
+    ax.set_xticks(range(3))
+    ax.set_xticklabels([l for _, l, _ in modes], fontsize=9, color=INK)
+    ax.set_ylim(-14, 115)
+    ax.set_yticks([0, 25, 50, 75, 100])
+    ax.set_ylabel("silent failures per fired injection, %", fontsize=9, color=INK_MUTED)
+    ax.set_title("Finished wrong and said done", fontsize=11, color=INK, loc="left", pad=12)
+
+    ax = axes[1]
+    style(ax)
+    base = cm.mean_cost(recs, "inject")
+    for i, (m, label, color) in enumerate(modes):
+        mult = cm.mean_cost(recs, m) / base
+        ax.bar(i, mult, 0.55, color=color, zorder=3)
+        ax.text(i, mult + 0.04, f"{mult:.2f}x", ha="center", va="bottom", fontsize=10, color=INK)
+    ax.axhline(1.0, color=INK_MUTED, linewidth=0.8, linestyle="--", zorder=2)
+    ax.set_xticks(range(3))
+    ax.set_xticklabels([l for _, l, _ in modes], fontsize=9, color=INK)
+    ax.set_ylim(0, max(2.6, 1.15 * max(cm.mean_cost(recs, m) / base for m, _, _ in modes)))
+    ax.set_ylabel("cost per trajectory, relative to no checkpoint", fontsize=9, color=INK_MUTED)
+    ax.set_title("What it cost", fontsize=11, color=INK, loc="left", pad=12)
+    n = cm.silent_failure_rate(recs, "inject").denominator
+    fig.text(0.02, 0.965, f"deepseek-flash · {path.name} · error bars: Wilson 95% CI · n={n} fired injections per arm",
+             fontsize=8, color=INK_MUTED)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    save(fig, out / "checkpoint-silent-failures.png")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
@@ -217,6 +273,7 @@ def main(argv=None):
     chart_contamination(out)
     chart_definition(out)
     chart_position_trap(out)
+    chart_checkpoint(out)
     return 0
 
 

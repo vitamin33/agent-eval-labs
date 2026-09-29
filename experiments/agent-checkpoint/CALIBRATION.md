@@ -143,7 +143,28 @@ effect) and stand.
 
 A stage-2 run had already started under the old line when this was found.
 It was stopped after 8 trajectories ($0.0181); the partial file is kept as
-`results/aborted-stage2-20260929T145312Z.jsonl` and is not a result.
+`results/aborted-stage2-20260929T145312Z.jsonl` and is not a result. A
+second start under the fixed line was stopped after 1 trajectory ($0.0014)
+for a tooling reason (the launcher's 10-minute limit would have cut a
+20-minute run) and relaunched detached; that file is kept as
+`results/aborted-stage2-20260929T145534Z.jsonl`. Neither is counted, both
+are on disk.
+
+### The defect the third start exposed: a malformed call crashed the run
+
+The relaunched stage 2 died on its 13th trajectory, `T1|inject_tool|1`
+(12 records, $0.0691, kept as `results/aborted-stage2-20260929T145602Z.jsonl`).
+The agent, offered `reconcile(tool, args)`, called the plain `list_orders`
+tool with an `args` keyword. The environment raised `TypeError`, the loop
+only caught `ToolError`, and the process exited. Experiment 2's loop had the
+same latent hole; its agents never tripped it because they were never shown
+a nested-argument tool.
+
+The agent's mistake is part of its trajectory and must be visible to it, not
+fatal to the run. Fixed: every malformed argument set is now returned to the
+agent as `{"error": "bad arguments for ..."}`, exactly like a bad id, with a
+test for the crashing shape. No measurement changed; no threshold, metric,
+fixture or prompt changed.
 
 ### Two observations for the write-up, not for the verdicts
 

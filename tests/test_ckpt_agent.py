@@ -210,3 +210,14 @@ def test_mock_provider_completes_every_cell(task, mode):
 def test_unknown_mode_is_refused():
     with pytest.raises(ValueError):
         ckpt_agent.run_trajectory(Scripted([_submit(1)]), CFG, T1, "inject_verify", 0)
+
+
+def test_a_malformed_tool_call_is_returned_to_the_agent_as_an_error():
+    """The agent, offered reconcile(tool, args), once called list_orders with an
+    `args` keyword and the run died. It must see an error and carry on."""
+    p = Scripted([("list_orders", {"args": {"status": "pending"}}), T1_SCRIPT[0], _submit(1)])
+    rec = ckpt_agent.run_trajectory(p, CFG, T1, "inject_tool", 0)
+    first = json.loads(_tool_msgs(p)[0]["content"])
+    assert "error" in first and "bad arguments" in first["error"]
+    assert rec["steps"][0]["result"] is None
+    assert rec["injection"]["applicable"]  # the well-formed call still got injected

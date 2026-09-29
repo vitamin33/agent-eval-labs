@@ -114,3 +114,14 @@ def test_o01_is_the_largest_eu_pending_order_so_a_wrong_region_moves_t8s_answer(
 def test_fixtures_are_plain_literals():
     assert all(isinstance(o["total"], float) for o in ckpt_fixtures.ORDERS)
     assert len({o["id"] for o in ckpt_fixtures.ORDERS}) == len(ckpt_fixtures.ORDERS)
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("list_orders", {"args": {"status": "pending"}}),   # stage 2's crash: reconcile's shape on a plain tool
+    ("get_order", {}),                                   # missing required argument
+    ("sum_totals", {"order_ids": ["O01"], "extra": 1}),
+    ("reconcile", {"tool": "get_order", "args": {"order": "O01"}}),
+])
+def test_malformed_arguments_are_a_visible_tool_error_not_a_crash(tool, args):
+    with pytest.raises(ckpt_env.ToolError):
+        ckpt_env.call(ckpt_env.Env3.fresh(), tool, args)

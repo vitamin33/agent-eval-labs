@@ -60,9 +60,17 @@ TOOL_NAMES = env_mod.TOOL_NAMES + ("reconcile",)
 
 
 def call(env: Env3, tool: str, args: dict[str, Any]) -> Any:
-    if tool == "reconcile":
-        return env.reconcile(args.get("tool"), args.get("args") or {})
-    return env_mod.call(env, tool, args)
+    """Dispatch a tool call. A malformed argument set (an unknown keyword, a
+    missing one) is a VISIBLE tool error returned to the agent, never an
+    exception that ends the run: stage 2's first start crashed when the agent,
+    offered `reconcile(tool, args)`, called plain `list_orders` with an `args`
+    keyword. The agent's mistake is part of the trajectory, not a harness fault."""
+    try:
+        if tool == "reconcile":
+            return env.reconcile(args.get("tool"), args.get("args") or {})
+        return env_mod.call(env, tool, args)
+    except TypeError as exc:
+        raise ToolError(f"bad arguments for {tool}: {exc}") from exc
 
 
 def checkpoint(env: Env3, tool: str, args: dict[str, Any]) -> dict | None:

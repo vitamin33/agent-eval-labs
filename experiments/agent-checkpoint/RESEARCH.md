@@ -338,4 +338,7 @@ read T8's clean outcome, and H1 and H3 continue to stage 2 as they would have
 anyway. The two affected trajectories are named in CALIBRATION.md with their
 re-graded outcome. Stage 2 runs with the corrected line. A stage-2 run that
 had started under the old line was stopped after 8 trajectories ($0.0181)
-and is kept on disk as `aborted-stage2-*.jsonl`, never counted.
+and is kept on disk as `aborted-stage2-*.jsonl`, never counted, as are a
+1-trajectory start stopped for a tooling reason and a 12-trajectory start
+that crashed on a malformed tool call, a loop defect fixed as error handling
+(CALIBRATION.md, stage 1).
