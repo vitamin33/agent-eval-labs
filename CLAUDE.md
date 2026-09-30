@@ -37,7 +37,9 @@ Experiment 3 (`experiments/agent-checkpoint/`) measured deterministic
 checkpoints at hand-off points; stages 1 and 2 are complete. Its stage 3, a
 cross-model replication (Claude Haiku 4.5, Gemini 3.8 Flash) plus the
 unexplained-wrapper arm on DeepSeek, is pre-registered in RESEARCH.md with
-its own configs and waits for `ANTHROPIC_API_KEY` and `GEMINI_API_KEY`.
+its own configs and waits for `ANTHROPIC_API_KEY` and `GEMINI_API_KEY`
+(`tools/ping_provider.py --config <cfg>` checks a provider before a stage).
+Candidates after that, each with its audience and cost: `docs/ROADMAP.md`.
 
 ## The publishing loop
 

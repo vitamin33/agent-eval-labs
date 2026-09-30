@@ -567,5 +567,10 @@ def build_provider(cfg, *, dry_run: bool, tasks: dict):
         return OpenAICompatProvider(
             cfg.provider, cfg.model, cfg.max_tokens, cfg.sampling_params(), cfg.base_url, key
         )
+    key_env = cfg.api_key_env or "ANTHROPIC_API_KEY"
+    if not os.environ.get(key_env):
+        raise RuntimeError(
+            f"{key_env} is not set. Put it in .env (chmod 600) or export it."
+        )
     return AnthropicProvider(cfg.model, cfg.max_tokens, cfg.sampling_params(),
                              thinking_budget=getattr(cfg, "thinking_budget", None))
